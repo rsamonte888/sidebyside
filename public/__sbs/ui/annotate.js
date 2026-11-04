@@ -307,11 +307,11 @@
     var c = window.SBS.context();
     var lines = [
       '**Page:** ' + c.path,
-      '**Live:** ' + c.live,
-      '**Staging:** ' + c.staging,
+      c.live && '**Live:** ' + c.live,
+      c.staging && '**Staging:** ' + c.staging,
       '**Viewport:** ' + c.viewport + ' · **Layout:** ' + c.layout,
       '**Compare:** ' + (link || c.share),
-    ];
+    ].filter(Boolean);
     var notes = items.map(function (it, i) { return itemNote(it, i, c.path); });
     if (notes.length) lines.push('', notes.join('\n'));
     if (summary.value.trim()) lines.push('', summary.value.trim());
@@ -413,10 +413,10 @@
     ctx.fillText('Page ' + c.path, pad, 10 * s);
     ctx.font = font(400, 12);
     ctx.fillStyle = '#4ade80';
-    var liveLabel = 'LIVE ' + c.live;
-    ctx.fillText(liveLabel, pad, 32 * s);
+    var liveLabel = c.live ? 'LIVE ' + c.live : '';
+    if (liveLabel) ctx.fillText(liveLabel, pad, 32 * s);
     ctx.fillStyle = '#fbbf24';
-    ctx.fillText('STAGING ' + c.staging, pad + ctx.measureText(liveLabel).width + 24 * s, 32 * s);
+    if (c.staging) ctx.fillText('STAGING ' + c.staging, pad + (liveLabel ? ctx.measureText(liveLabel).width + 24 * s : 0), 32 * s);
     ctx.fillStyle = '#9ca3af';
     var meta = c.viewport + ' · ' + new Date().toLocaleString();
     ctx.fillText(meta, W - pad - ctx.measureText(meta).width, 10 * s);

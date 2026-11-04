@@ -6,6 +6,7 @@ A web app for QA to compare a **production** page with a new **Amplify** build o
 - **Synced navigation.** Click a link on either side and the other goes to the same path. For Nuxt this uses the app's own router, so there's no full reload.
 - **Synced clicks.** Opening an accordion, tab or toggle on one side opens the same one on the other. The match is made by its text, with a fallback to its position in the page. Links, form fields and submit buttons are never mirrored, so nothing is submitted twice.
 - **Figma vs. staging.** Paste a Figma frame link (right-click the frame → *Copy link to selection*) into either box. The frame shows as an image at its real width, the viewport switches to match, and scroll sync, overlay/difference, annotations and share links all work against it. Needs `FIGMA_TOKEN`.
+- **Just one site.** Leave Staging (or Live) empty to load a single site full width, e.g. to annotate production on its own. Annotations, screenshots, notes and share links all work.
 - **Both or one.** Switch between **Both**, **Live only** and **Staging only** (or use the ⤢ button on a pane) to see one site full width. The hidden site keeps syncing, so switching back lines up straight away.
 - **Viewport presets.** Fit, 1920, 1440, 1280, 1024, 768, 390 and 360. Wide viewports are scaled down to fit the pane.
 - **Layouts.** Side by side, stacked, or **overlay** with a staging-opacity slider and a **Difference** mode. In Difference mode identical pixels turn black, so changes stand out.

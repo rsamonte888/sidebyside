@@ -414,3 +414,7 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 
 /* Figma design pane */
 .tag.design { color: #a259ff; background: color-mix(in srgb, #a259ff 14%, transparent); }
+
+/* single-site mode: only one URL entered */
+.single-site .pane [data-solo] { display: none; }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }

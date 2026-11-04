@@ -124,15 +124,21 @@
     var inputs = { live: els.liveUrl, staging: els.stagingUrl };
     var urls = {};
     var ok = true;
+    // Leave one box empty to load just one site (e.g. production, to annotate it).
+    var filled = ROLES.filter(function (r) { return inputs[r].value.trim(); });
+    if (!filled.length) { toast('Enter a URL, or two to compare'); return; }
     ROLES.forEach(function (r) {
       var raw = inputs[r].value;
-      if (isFigma(raw)) { setKind(r, figmaUrl(raw)); urls[r] = null; return; }
+      urls[r] = null;
+      if (filled.indexOf(r) < 0) { setKind(r, null); return; }
+      if (isFigma(raw)) { setKind(r, figmaUrl(raw)); return; }
       setKind(r, null);
       urls[r] = parseUrl(raw);
       if (!urls[r]) ok = false;
     });
-    if (!ok) { toast('Enter a valid URL (or a Figma frame link) in both boxes'); return; }
+    if (!ok) { toast('Enter a valid URL or a Figma frame link'); return; }
     if (panes.live.figma && panes.staging.figma) { toast('Compare a Figma design with a website, not two designs'); return; }
+    setSingle(filled.length === 1 ? filled[0] : null);
 
     var path = els.path.value.trim();
     if (!path) {
@@ -144,15 +150,21 @@
     els.path.value = path === '/' ? '' : path;
 
     ROLES.forEach(function (r) {
-      var value = panes[r].figma || urls[r].origin;
-      panes[r].origin = panes[r].figma ? null : urls[r].origin;
+      var value = panes[r].figma || (urls[r] ? urls[r].origin : '');
+      panes[r].origin = urls[r] ? urls[r].origin : null;
       inputs[r].value = value;
       store.set(r, value);
     });
 
     els.empty.hidden = true;
     leader = null;
-    ROLES.forEach(function (r) { load(r, path); });
+    ROLES.forEach(function (r) {
+      if (panes[r].origin || panes[r].figma) return load(r, path);
+      // Not used in single-site mode.
+      panes[r].path = '/';
+      panes[r].iframe.removeAttribute('src');
+      updateLabel(r);
+    });
     syncQuery();
   }
 
@@ -295,7 +307,22 @@
   var view = 'both';
   var viewButtons = document.querySelectorAll('[data-view]');
 
+  // Single-site mode: only one URL was entered, so only that pane is shown.
+  var single = null;
+  function setSingle(role) {
+    var was = single;
+    single = role;
+    document.body.classList.toggle('single-site', !!role);
+    viewButtons.forEach(function (b) {
+      b.disabled = !!role && b.dataset.view !== role;
+      b.title = b.disabled ? 'Enter both URLs to compare' : '';
+    });
+    if (role) setView(role);
+    else if (was) setView('both');
+  }
+
   function setView(v, initial) {
+    if (single) v = single;
     view = v === 'live' || v === 'staging' ? v : 'both';
     store.set('view', view);
     viewButtons.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
@@ -466,7 +493,7 @@
           location.href = '/__sbs/login?next=' + encodeURIComponent(location.pathname + location.search);
           return;
         }
-        if (q.get('live') && q.get('staging')) compare();
+        if (q.get('live') || q.get('staging')) compare();
         if (q.get('ann')) {
           decodeState(q.get('ann')).then(function (data) {
             restore = data.sc || null;
@@ -491,7 +518,7 @@
       return {
         live: (panes.live.figma ? 'Figma ' : '') + fullUrl('live'),
         staging: (panes.staging.figma ? 'Figma ' : '') + fullUrl('staging'),
-        path: (panes.live.figma ? panes.staging.path : panes.live.path) || '/',
+        path: (single ? panes[single].path : panes.live.figma ? panes.staging.path : panes.live.path) || '/',
         viewport: opt(els.viewport),
         layout: opt(els.layout),
         share: location.href,
