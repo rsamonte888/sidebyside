@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Side by Side</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='5' width='13' height='22' rx='3' fill='%2316a34a'/%3E%3Crect x='17' y='5' width='13' height='22' rx='3' fill='%23f59e0b'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="toolbar">
+    <form id="form" class="row urls" autocomplete="off">
+      <span class="brand" title="Side by Side">
+        <span class="dot live"></span><span class="dot staging"></span>
+        Side by Side
+      </span>
+      <label class="field">
+        <span class="tag live">Live</span>
+        <input id="liveUrl" type="text" placeholder="https://www.yoursite.com" spellcheck="false" required>
+      </label>
+      <label class="field">
+        <span class="tag staging">Staging</span>
+        <input id="stagingUrl" type="text" placeholder="https://branch.d1abc23.amplifyapp.com" spellcheck="false" required>
+      </label>
+      <label class="field path">
+        <span class="tag">Path</span>
+        <input id="path" type="text" placeholder="/" spellcheck="false">
+      </label>
+      <button type="submit" class="primary">Compare</button>
+    </form>
+
+    <div class="row controls">
+      <label class="toggle"><input id="syncScroll" type="checkbox" checked> Sync scroll</label>
+      <label class="select" title="Pixel: same scroll offset. Percent: same relative position, useful when page heights differ.">
+        <select id="scrollMode">
+          <option value="px">by pixel</option>
+          <option value="pct">by percent</option>
+        </select>
+      </label>
+      <label class="toggle"><input id="syncNav" type="checkbox" checked> Sync navigation</label>
+      <button id="align" type="button" title="Move staging to the live pane's scroll position">Align</button>
+
+      <span class="sep"></span>
+
+      <label class="select">Viewport
+        <select id="viewport">
+          <option value="fit">Fit pane</option>
+          <option value="1920">Desktop 1920</option>
+          <option value="1440">Desktop 1440</option>
+          <option value="1280">Laptop 1280</option>
+          <option value="1024">Tablet L 1024</option>
+          <option value="768">Tablet 768</option>
+          <option value="390">Mobile 390</option>
+          <option value="360">Mobile 360</option>
+        </select>
+      </label>
+      <label class="select">Layout
+        <select id="layout">
+          <option value="split">Side by side</option>
+          <option value="stack">Stacked</option>
+          <option value="overlay">Overlay</option>
+        </select>
+      </label>
+      <span id="overlayControls" class="overlay-controls" hidden>
+        <label class="select">Staging opacity
+          <input id="opacity" type="range" min="0" max="100" value="50">
+        </label>
+        <label class="toggle" title="Highlights pixel differences: identical areas turn black">
+          <input id="difference" type="checkbox"> Difference
+        </label>
+      </span>
+
+      <span class="spacer"></span>
+      <button id="share" type="button" title="Copy a link to this comparison">Copy link</button>
+    </div>
+  </header>
+
+  <main id="stage" class="stage split">
+    <section class="pane" data-role="live">
+      <div class="pane-bar">
+        <span class="tag live">Live</span>
+        <span class="pane-url" data-url>—</span>
+        <button type="button" data-reload title="Reload">↻</button>
+        <a data-open target="_blank" rel="noopener" title="Open the real page in a new tab">↗</a>
+      </div>
+      <div class="viewport-host"><div class="viewport"><iframe title="Live site"></iframe></div></div>
+    </section>
+    <div class="divider"></div>
+    <section class="pane" data-role="staging">
+      <div class="pane-bar">
+        <span class="tag staging">Staging</span>
+        <span class="pane-url" data-url>—</span>
+        <button type="button" data-reload title="Reload">↻</button>
+        <a data-open target="_blank" rel="noopener" title="Open the real page in a new tab">↗</a>
+      </div>
+      <div class="viewport-host"><div class="viewport"><iframe title="Staging site"></iframe></div></div>
+    </section>
+
+    <div id="empty" class="empty">
+      <h1>Compare live and staging</h1>
+      <p>Enter your production URL and the Amplify preview URL above, then press <b>Compare</b>.</p>
+      <ul>
+        <li>Scroll either side and the other follows.</li>
+        <li>Click a link in either side and the other navigates to the same path.</li>
+        <li>Use <b>Overlay → Difference</b> to spot pixel changes.</li>
+      </ul>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "sidebyside",
+  "version": "1.0.0",
+  "description": "Compare a production site and an Amplify staging build side by side with synced scrolling and navigation.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}
