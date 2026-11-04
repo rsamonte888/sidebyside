@@ -143,12 +143,66 @@
     location.assign(prefix() + path);
   }
 
+  // --- click sync (accordions, tabs, toggles) ----------------------------
+  // Only UI toggles are mirrored. Links are handled by navigation sync, and
+  // form fields / submit buttons are never mirrored, so nothing gets
+  // submitted on the other site by accident.
+  var TOGGLE = 'summary,[aria-expanded],[aria-controls],[role=tab],[role=button],[role=switch],' +
+    '[data-toggle],[data-bs-toggle],button';
+
+  function norm(el) { return (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160); }
+
+  function clickable(t) {
+    if (!t || !t.closest) return null;
+    var el = t.closest(TOGGLE);
+    if (!el) {
+      // Plain elements with a click handler usually show a pointer cursor.
+      for (var n = t, i = 0; n && n !== document.body && i < 5; n = n.parentElement, i++) {
+        if (getComputedStyle(n).cursor === 'pointer') { el = n; break; }
+      }
+    }
+    if (!el) return null;
+    var link = el.closest('a[href]');
+    if (link && !/^(#|javascript:)/i.test(link.getAttribute('href'))) return null;
+    if (el.matches('input,select,textarea,option,label') || el.closest('label')) return null;
+    if (el.tagName === 'BUTTON' && (el.type === 'submit' && el.form)) return null;
+    return el;
+  }
+
+  function sameText(tag, text) {
+    return Array.prototype.filter.call(document.getElementsByTagName(tag), function (e) { return norm(e) === text; });
+  }
+
+  document.addEventListener('click', function (e) {
+    if (!e.isTrusted) return; // ignore clicks we replayed ourselves
+    var el = clickable(e.target);
+    if (!el) return;
+    var text = norm(el);
+    var tag = el.tagName.toLowerCase();
+    var index = text.length >= 2 ? sameText(tag, text).indexOf(el) : -1;
+    post({ type: 'click', tag: tag, text: text, index: index, path: cssPath(el) });
+  }, true);
+
+  function replayClick(msg) {
+    var el = null;
+    if (msg.text && msg.text.length >= 2 && msg.index >= 0) {
+      var matches = sameText(msg.tag, msg.text);
+      if (matches.length) el = matches[Math.min(msg.index, matches.length - 1)];
+    }
+    if (!el && msg.path) {
+      try { el = document.querySelector(msg.path); } catch (e) { el = null; }
+    }
+    if (el && clickable(el)) el.click();
+    else post({ type: 'clickMissed', text: msg.text });
+  }
+
   window.addEventListener('message', function (e) {
     if (e.source !== parentWin) return;
     var msg = e.data;
     if (!msg || msg.__sbs !== 1) return;
     if (msg.type === 'scrollTo') scrollTo(msg);
     else if (msg.type === 'navigate') navigate(msg.path);
+    else if (msg.type === 'click') replayClick(msg);
     else if (msg.type === 'ping') {
       var m = metrics(); m.type = 'scroll'; post(m);
       lastPath = null; checkNav();

@@ -6,7 +6,7 @@
 
   var els = {
     form: $('form'), liveUrl: $('liveUrl'), stagingUrl: $('stagingUrl'), path: $('path'),
-    syncScroll: $('syncScroll'), scrollMode: $('scrollMode'), syncNav: $('syncNav'),
+    syncScroll: $('syncScroll'), scrollMode: $('scrollMode'), syncNav: $('syncNav'), syncClicks: $('syncClicks'),
     align: $('align'), viewport: $('viewport'), layout: $('layout'),
     overlayControls: $('overlayControls'), opacity: $('opacity'), difference: $('difference'),
     share: $('share'), stage: $('stage'), empty: $('empty'), toast: $('toast'),
@@ -149,6 +149,17 @@
     switch (msg.type) {
       case 'active':
         setLeader(role);
+        break;
+
+      case 'click':
+        if (role === leader && els.syncClicks.checked) {
+          send(other(role), { type: 'click', tag: msg.tag, text: msg.text, index: msg.index, path: msg.path });
+        }
+        break;
+
+      case 'clickMissed':
+        toast('Couldn’t find ' + (msg.text ? '“' + msg.text.slice(0, 40) + '”' : 'that element') +
+          ' on ' + (role === 'live' ? 'live' : 'staging'));
         break;
 
       case 'scroll':

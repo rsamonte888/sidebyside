@@ -4,6 +4,7 @@ A web app for QA to compare a **production** page with a new **Amplify** build o
 
 - **Synced scrolling.** Scroll either side and the other follows. You can sync *by pixel* (same offset) or *by percent* (same relative position, useful when page heights differ). **Align** snaps staging to live.
 - **Synced navigation.** Click a link on either side and the other goes to the same path. For Nuxt this uses the app's own router, so there's no full reload.
+- **Synced clicks.** Opening an accordion, tab or toggle on one side opens the same one on the other. The match is made by its text, with a fallback to its position in the page. Links, form fields and submit buttons are never mirrored, so nothing is submitted twice.
 - **Both or one.** Switch between **Both**, **Live only** and **Staging only** (or use the ⤢ button on a pane) to see one site full width. The hidden site keeps syncing, so switching back lines up straight away.
 - **Viewport presets.** Fit, 1920, 1440, 1280, 1024, 768, 390 and 360. Wide viewports are scaled down to fit the pane.
 - **Layouts.** Side by side, stacked, or **overlay** with a staging-opacity slider and a **Difference** mode. In Difference mode identical pixels turn black, so changes stand out.
