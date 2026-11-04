@@ -80,43 +80,75 @@
     window.dispatchEvent(new CustomEvent('sbs:' + name, { detail: { role: role } }));
   }
 
+  // --- Figma ---------------------------------------------------------------
+  // A Figma frame link in either box shows that frame as an image (rendered
+  // by the server through the Figma API) instead of a website.
+  function isFigma(raw) { return /^(https?:\/\/)?([\w-]+\.)?figma\.com\/(design|file|proto)\//i.test((raw || '').trim()); }
+  function figmaUrl(raw) { raw = raw.trim(); return /^https?:\/\//i.test(raw) ? raw : 'https://' + raw; }
+  var DESIGN_PATH = '/__design';
+
+  function setKind(role, figma) {
+    var pane = panes[role];
+    pane.figma = figma || null;
+    var tag = pane.el.querySelector('.pane-bar .tag');
+    tag.textContent = figma ? 'Design' : (role === 'live' ? 'Live' : 'Staging');
+    tag.classList.toggle('design', !!figma);
+  }
+
   function load(role, path) {
     var pane = panes[role];
-    pane.path = path;
+    pane.path = pane.figma ? DESIGN_PATH : path;
     pane.scroll = { x: 0, y: 0 };
     emit('nav', role);
     updateLabel(role);
-    pane.iframe.src = '/x/' + encodeSite(pane.origin) + path;
+    pane.iframe.src = pane.figma
+      ? '/__sbs/ui/design.html?figma=' + encodeURIComponent(pane.figma)
+      : '/x/' + encodeSite(pane.origin) + path;
+  }
+
+  function fullUrl(role) {
+    var pane = panes[role];
+    if (pane.figma) return pane.figma;
+    return pane.origin ? pane.origin + pane.path : '';
   }
 
   function updateLabel(role) {
     var pane = panes[role];
-    var full = pane.origin ? pane.origin + pane.path : '—';
+    var full = fullUrl(role) || '—';
     pane.urlLabel.textContent = full;
     pane.urlLabel.title = full;
-    if (pane.origin) pane.openLink.href = full; else pane.openLink.removeAttribute('href');
+    if (full !== '—') pane.openLink.href = full; else pane.openLink.removeAttribute('href');
   }
 
   function compare() {
-    var live = parseUrl(els.liveUrl.value);
-    var staging = parseUrl(els.stagingUrl.value);
-    if (!live || !staging) { toast('Enter valid live and staging URLs'); return; }
+    var inputs = { live: els.liveUrl, staging: els.stagingUrl };
+    var urls = {};
+    var ok = true;
+    ROLES.forEach(function (r) {
+      var raw = inputs[r].value;
+      if (isFigma(raw)) { setKind(r, figmaUrl(raw)); urls[r] = null; return; }
+      setKind(r, null);
+      urls[r] = parseUrl(raw);
+      if (!urls[r]) ok = false;
+    });
+    if (!ok) { toast('Enter a valid URL (or a Figma frame link) in both boxes'); return; }
+    if (panes.live.figma && panes.staging.figma) { toast('Compare a Figma design with a website, not two designs'); return; }
 
     var path = els.path.value.trim();
     if (!path) {
-      var livePath = live.pathname + live.search + live.hash;
-      var stagingPath = staging.pathname + staging.search + staging.hash;
-      path = livePath !== '/' ? livePath : stagingPath;
+      var pathOf = function (u) { return u ? u.pathname + u.search + u.hash : '/'; };
+      var livePath = pathOf(urls.live);
+      path = livePath !== '/' ? livePath : pathOf(urls.staging);
     }
     path = normalizePath(path);
     els.path.value = path === '/' ? '' : path;
 
-    panes.live.origin = live.origin;
-    panes.staging.origin = staging.origin;
-    els.liveUrl.value = live.origin;
-    els.stagingUrl.value = staging.origin;
-    store.set('live', live.origin);
-    store.set('staging', staging.origin);
+    ROLES.forEach(function (r) {
+      var value = panes[r].figma || urls[r].origin;
+      panes[r].origin = panes[r].figma ? null : urls[r].origin;
+      inputs[r].value = value;
+      store.set(r, value);
+    });
 
     els.empty.hidden = true;
     leader = null;
@@ -152,8 +184,26 @@
         break;
 
       case 'click':
-        if (role === leader && els.syncClicks.checked) {
+        if (role === leader && els.syncClicks.checked && !panes.live.figma && !panes.staging.figma) {
           send(other(role), { type: 'click', tag: msg.tag, text: msg.text, index: msg.index, path: msg.path });
+        }
+        break;
+
+      case 'design':
+        // Match the viewport to the Figma frame's width so they line up 1:1.
+        if (msg.width) {
+          var w = String(msg.width);
+          var opt = Array.prototype.find.call(els.viewport.options, function (o) { return o.value === w; });
+          if (!opt) {
+            opt = new Option('Design ' + w, w);
+            els.viewport.add(opt, 1);
+          }
+          if (els.viewport.value !== w) {
+            els.viewport.value = w;
+            layoutViewports();
+            syncQuery();
+            toast('Viewport set to ' + w + 'px to match the Figma frame');
+          }
         }
         break;
 
@@ -183,6 +233,7 @@
         break;
 
       case 'nav':
+        if (panes[role].figma) break; // a design has no pages
         if (panes[role].path !== msg.path) panes[role].scroll = { x: 0, y: 0 };
         panes[role].path = msg.path;
         emit('nav', role);
@@ -193,7 +244,7 @@
         if (role === leader) {
           els.path.value = msg.path === '/' ? '' : msg.path;
           syncQuery();
-          if (els.syncNav.checked && panes[other(role)].path !== msg.path) {
+          if (els.syncNav.checked && !panes[other(role)].figma && panes[other(role)].path !== msg.path) {
             send(other(role), { type: 'navigate', path: msg.path });
           }
         }
@@ -289,8 +340,10 @@
   // --- shareable URL -----------------------------------------------------
   function syncQuery() {
     var q = new URLSearchParams();
-    if (panes.live.origin) q.set('live', panes.live.origin);
-    if (panes.staging.origin) q.set('staging', panes.staging.origin);
+    ROLES.forEach(function (r) {
+      var v = panes[r].figma || panes[r].origin;
+      if (v) q.set(r, v);
+    });
     var p = normalizePath(els.path.value);
     if (p !== '/') q.set('path', p);
     if (els.viewport.value !== 'fit') q.set('vp', els.viewport.value);
@@ -370,6 +423,19 @@
     });
   });
 
+  // Relabel an input as "Design" while it holds a Figma link.
+  [[els.liveUrl, 'Live'], [els.stagingUrl, 'Staging']].forEach(function (pair) {
+    var tag = pair[0].parentNode.querySelector('.tag');
+    var update = function () {
+      var fig = isFigma(pair[0].value);
+      tag.textContent = fig ? 'Design' : pair[1];
+      tag.classList.toggle('design', fig);
+    };
+    pair[0].addEventListener('input', update);
+    pair[0].addEventListener('change', update);
+    window.addEventListener('load', update);
+  });
+
   // --- wiring ------------------------------------------------------------
   els.form.addEventListener('submit', function (e) { e.preventDefault(); compare(); });
   els.viewport.addEventListener('change', function () { store.set('vp', els.viewport.value); layoutViewports(); syncQuery(); });
@@ -423,9 +489,9 @@
       syncQuery();
       var opt = function (sel) { return sel.options[sel.selectedIndex].text; };
       return {
-        live: panes.live.origin ? panes.live.origin + panes.live.path : '',
-        staging: panes.staging.origin ? panes.staging.origin + panes.staging.path : '',
-        path: panes.live.path || '/',
+        live: (panes.live.figma ? 'Figma ' : '') + fullUrl('live'),
+        staging: (panes.staging.figma ? 'Figma ' : '') + fullUrl('staging'),
+        path: (panes.live.figma ? panes.staging.path : panes.live.path) || '/',
         viewport: opt(els.viewport),
         layout: opt(els.layout),
         share: location.href,

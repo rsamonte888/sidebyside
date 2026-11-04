@@ -4,7 +4,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import {
   rewriteOrigins, rewriteHtmlPaths, rewriteCssPaths, injectAgent, hostAllowed,
-  encodeSite, decodeSite, parseProxyPath,
+  encodeSite, decodeSite, parseProxyPath, parseFigmaUrl,
 } from '../lib/core.js';
 import { createServer } from '../server.js';
 
@@ -142,6 +142,53 @@ test('login flow and static UI', async () => {
     assert.equal((await fetch(`${base}/__sbs/me`, { headers: { cookie } })).status, 200);
   } finally {
     delete process.env.APP_PASSWORD;
+    app.close();
+  }
+});
+
+test('parseFigmaUrl', () => {
+  assert.deepEqual(parseFigmaUrl('https://www.figma.com/design/AbC123/Site?node-id=12-345&t=x'), { key: 'AbC123', node: '12:345' });
+  assert.deepEqual(parseFigmaUrl('https://www.figma.com/file/AbC123/Site?node-id=12%3A345'), { key: 'AbC123', node: '12:345' });
+  assert.deepEqual(parseFigmaUrl('https://www.figma.com/design/AbC123/Site/branch/Br9/Site?node-id=1-2'), { key: 'Br9', node: '1:2' });
+  assert.equal(parseFigmaUrl('https://www.figma.com/design/AbC123/Site').node, null);
+  assert.equal(parseFigmaUrl('https://evil.com/design/x?node-id=1-2'), null);
+});
+
+test('figma render endpoint talks to the Figma API with the token', async () => {
+  const seen = [];
+  const api = http.createServer((req, res) => {
+    seen.push({ url: req.url, token: req.headers['x-figma-token'] });
+    if (req.url.includes('/v1/images/NOPE')) return res.writeHead(403, { 'content-type': 'application/json' }).end('{"status":403,"err":"Forbidden"}');
+    const big = req.url.includes('BIG') && req.url.includes('scale=2');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ err: null, images: { '12:345': big ? null : 'https://figma-alpha-api.s3.amazonaws.com/img.png' } }));
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => api.once('listening', r));
+  process.env.FIGMA_API_BASE = `http://127.0.0.1:${api.address().port}`;
+  const app = createServer().listen(0, '127.0.0.1');
+  await new Promise((r) => app.once('listening', r));
+  const base = `http://127.0.0.1:${app.address().port}`;
+  const render = (link) => fetch(`${base}/__sbs/figma/render?url=${encodeURIComponent(link)}`);
+  try {
+    let r = await render('https://www.figma.com/design/KEY/x?node-id=12-345');
+    assert.equal(r.status, 501, 'no token configured');
+    process.env.FIGMA_TOKEN = 'secret-token';
+    r = await render('https://www.figma.com/design/KEY/x?node-id=12-345');
+    assert.deepEqual(await r.json(), { src: 'https://figma-alpha-api.s3.amazonaws.com/img.png', scale: 2 });
+    assert.equal(seen.at(-1).token, 'secret-token');
+    assert.match(seen.at(-1).url, /\/v1\/images\/KEY\?ids=12%3A345&format=png&scale=2/);
+    r = await render('https://www.figma.com/design/BIG/x?node-id=12-345');
+    assert.equal((await r.json()).scale, 1, 'falls back to 1x for huge frames');
+    r = await render('https://www.figma.com/design/NOPE/x?node-id=12-345');
+    assert.equal(r.status, 403);
+    assert.match((await r.json()).error, /token/);
+    r = await render('https://www.figma.com/design/KEY/x');
+    assert.equal(r.status, 400);
+    assert.match((await r.json()).error, /Copy link to selection/);
+  } finally {
+    delete process.env.FIGMA_TOKEN;
+    delete process.env.FIGMA_API_BASE;
+    api.close();
     app.close();
   }
 });

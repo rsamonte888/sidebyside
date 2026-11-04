@@ -411,3 +411,6 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .tool-banner:hover { filter: brightness(1.08); border: 0; }
 .tool-banner[hidden], .capturing .tool-banner { display: none; }
 .tool-banner b { margin-right: 6px; }
+
+/* Figma design pane */
+.tag.design { color: #a259ff; background: color-mix(in srgb, #a259ff 14%, transparent); }
