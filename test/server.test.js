@@ -2,24 +2,56 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import zlib from 'node:zlib';
-import { rewriteOrigins, injectAgent, hostAllowed, parseTarget, createProxyHandler } from '../server.js';
+import {
+  rewriteOrigins, rewriteHtmlPaths, rewriteCssPaths, injectAgent, hostAllowed,
+  encodeSite, decodeSite, parseProxyPath, createHandler,
+} from '../server.js';
 
-test('rewriteOrigins replaces absolute, escaped and protocol-relative URLs', () => {
-  const html = `<a href="https://www.site.com/about">x</a>
-<link href="//www.site.com/a.css">
-<script>window.__NUXT__={url:"https:\\/\\/www.site.com\\/p"}</script>
-<a href="https://www.site.com.au/">other</a>`;
-  const out = rewriteOrigins(html, 'https://www.site.com', 'http://localhost:4001');
-  assert.match(out, /href="http:\/\/localhost:4001\/about"/);
-  assert.match(out, /href="\/\/localhost:4001\/a.css"/);
-  assert.match(out, /"http:\\\/\\\/localhost:4001\\\/p"/);
-  assert.match(out, /https:\/\/www\.site\.com\.au\//, 'must not touch a different domain');
+test('site encoding round-trips', () => {
+  assert.equal(encodeSite('https://www.site.com'), 'www.site.com');
+  assert.equal(encodeSite('http://localhost:3000'), 'http:localhost:3000');
+  assert.equal(decodeSite('www.site.com'), 'https://www.site.com');
+  assert.equal(decodeSite('http:localhost:3000'), 'http://localhost:3000');
+  assert.equal(decodeSite('evil.com/../x'), null);
+  assert.deepEqual(parseProxyPath('/x/www.site.com/a/b'), {
+    site: 'www.site.com', origin: 'https://www.site.com', prefix: '/x/www.site.com', rest: '/a/b',
+  });
+  assert.equal(parseProxyPath('/x/www.site.com').rest, '/');
+  assert.equal(parseProxyPath('/other'), null);
 });
 
-test('injectAgent adds the agent after <head> and strips CSP meta', () => {
-  const out = injectAgent('<html><head lang="x"><meta http-equiv="Content-Security-Policy" content="frame-ancestors none"></head></html>');
-  assert.match(out, /<head lang="x"><script src="\/__sbs\/agent.js"><\/script>/);
-  assert.doesNotMatch(out, /Content-Security-Policy/);
+test('rewriteOrigins handles absolute, escaped and protocol-relative URLs', () => {
+  const base = 'https://sbs.co/x/www.site.com';
+  const html = `<a href="https://www.site.com/about">x</a><link href="//www.site.com/a.css">
+<script>u="https:\\/\\/www.site.com\\/p"</script><a href="https://www.site.com.au/">o</a>`;
+  const out = rewriteOrigins(html, 'https://www.site.com', base);
+  assert.match(out, /href="https:\/\/sbs\.co\/x\/www\.site\.com\/about"/);
+  assert.match(out, /href="\/\/sbs\.co\/x\/www\.site\.com\/a\.css"/);
+  assert.match(out, /"https:\\\/\\\/sbs\.co\\\/x\\\/www\.site\.com\\\/p"/);
+  assert.match(out, /https:\/\/www\.site\.com\.au\//);
+});
+
+test('rewriteHtmlPaths prefixes root-relative URLs and Nuxt baseURL', () => {
+  const P = '/x/www.site.com';
+  const html = `<script type="importmap">{"imports":{"#entry":"/_nuxt/a.js"}}</script>
+<link rel="modulepreload" href="/_nuxt/a.js"><script type="module" src="/_nuxt/a.js"></script>
+<img src="/i.png" srcset="/i.png 1x, /i@2x.png 2x"><a href="//cdn.com/x">c</a><div style="background:url('/bg.jpg')"></div>
+<script>window.__NUXT__.config={app:{baseURL:"/",buildAssetsDir:"/_nuxt/"}}</script><meta name="referrer" content="no-referrer">`;
+  const out = rewriteHtmlPaths(html, P);
+  assert.match(out, /"#entry":"\/x\/www\.site\.com\/_nuxt\/a\.js"/);
+  assert.match(out, /href="\/x\/www\.site\.com\/_nuxt\/a\.js"/);
+  assert.match(out, /src="\/x\/www\.site\.com\/_nuxt\/a\.js"/);
+  assert.match(out, /srcset="\/x\/www\.site\.com\/i\.png 1x, \/x\/www\.site\.com\/i@2x\.png 2x"/);
+  assert.match(out, /href="\/\/cdn\.com\/x"/, 'protocol-relative untouched');
+  assert.match(out, /url\('\/x\/www\.site\.com\/bg\.jpg'\)/);
+  assert.match(out, /baseURL:"\/x\/www\.site\.com\/"/);
+  assert.match(out, /buildAssetsDir:"\/_nuxt\/"/, 'assets dir is joined with baseURL by Nuxt');
+  assert.doesNotMatch(out, /referrer/);
+  assert.equal(rewriteCssPaths('a{background:url(/a.png)}', P), `a{background:url(${P}/a.png)}`);
+});
+
+test('injectAgent adds the agent after <head>', () => {
+  assert.match(injectAgent('<html><head lang="x"></head></html>'), /<head lang="x"><script src="\/__sbs\/agent.js"><\/script>/);
 });
 
 test('hostAllowed supports wildcards', () => {
@@ -31,55 +63,53 @@ test('hostAllowed supports wildcards', () => {
   assert.ok(hostAllowed('anything.com', []));
 });
 
-test('parseTarget adds https and rejects non-http', () => {
-  assert.equal(parseTarget('site.com/x').url.href, 'https://site.com/x');
-  assert.ok(parseTarget('ftp://site.com').error);
-});
-
-test('proxy strips framing headers, rewrites HTML, keeps cookies on proxy host', async () => {
+test('proxy end to end: headers, rewriting, cookies, redirects, referer fallback', async () => {
   const upstream = http.createServer((req, res) => {
-    if (req.url === '/redirect') {
-      res.writeHead(301, { location: `http://127.0.0.1:${upstream.address().port}/landing` });
-      return res.end();
-    }
-    const body = zlib.gzipSync(`<html><head><title>t</title></head><body><a href="http://127.0.0.1:${upstream.address().port}/x">x</a></body></html>`);
+    const self = `http://127.0.0.1:${upstream.address().port}`;
+    if (req.url === '/redirect') return res.writeHead(301, { location: `${self}/landing` }).end();
+    if (req.url === '/api/x') return res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
+    const body = zlib.gzipSync(`<html><head></head><body><a href="${self}/x">x</a><img src="/i.png"></body></html>`);
     res.writeHead(200, {
-      'content-type': 'text/html; charset=utf-8',
-      'content-encoding': 'gzip',
-      'x-frame-options': 'DENY',
-      'content-security-policy': "frame-ancestors 'none'",
+      'content-type': 'text/html; charset=utf-8', 'content-encoding': 'gzip',
+      'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'",
       'set-cookie': ['sid=1; Domain=127.0.0.1; Path=/; Secure; SameSite=None'],
     });
     res.end(body);
   }).listen(0, '127.0.0.1');
   await new Promise((r) => upstream.once('listening', r));
-  const target = `http://127.0.0.1:${upstream.address().port}`;
+  const site = `http:127.0.0.1:${upstream.address().port}`;
 
-  const proxy = http.createServer(createProxyHandler('live')).listen(0, '127.0.0.1');
-  await new Promise((r) => proxy.once('listening', r));
-  const p = `http://127.0.0.1:${proxy.address().port}`;
+  const app = http.createServer(createHandler()).listen(0, '127.0.0.1');
+  await new Promise((r) => app.once('listening', r));
+  const base = `http://127.0.0.1:${app.address().port}`;
+  const P = `/x/${site}`;
 
   try {
-    const start = await fetch(`${p}/__sbs/start?target=${encodeURIComponent(target + '/page')}`, { redirect: 'manual' });
-    assert.equal(start.status, 302);
-    assert.equal(start.headers.get('location'), '/page');
-    const cookie = start.headers.get('set-cookie').split(';')[0];
-
-    const page = await fetch(`${p}/page`, { headers: { cookie } });
+    const page = await fetch(`${base}${P}/page`);
     const html = await page.text();
     assert.equal(page.status, 200);
     assert.equal(page.headers.get('x-frame-options'), null);
     assert.equal(page.headers.get('content-security-policy'), null);
     assert.match(html, /<script src="\/__sbs\/agent.js">/);
-    assert.match(html, new RegExp(`href="${p}/x"`));
-    const sc = page.headers.getSetCookie()[0];
-    assert.doesNotMatch(sc, /Domain/i);
-    assert.doesNotMatch(sc, /Secure/i);
+    assert.ok(html.includes(`href="${base}${P}/x"`));
+    assert.ok(html.includes(`src="${P}/i.png"`));
+    const cookie = page.headers.getSetCookie()[0];
+    assert.doesNotMatch(cookie, /Domain|Secure/i);
+    assert.ok(cookie.includes(`Path=${P}/`));
 
-    const redir = await fetch(`${p}/redirect`, { headers: { cookie }, redirect: 'manual' });
-    assert.equal(redir.headers.get('location'), '/landing');
+    const redir = await fetch(`${base}${P}/redirect`, { redirect: 'manual' });
+    assert.equal(redir.headers.get('location'), `${P}/landing`);
+
+    // fetch('/api/x') from inside a proxied page: routed by Referer
+    const api = await fetch(`${base}/api/x`, { headers: { referer: `${base}${P}/page` } });
+    assert.deepEqual(await api.json(), { ok: true });
+    // a navigation that escaped the prefix is redirected back into it
+    const nav = await fetch(`${base}/about`, {
+      headers: { referer: `${base}${P}/page`, 'sec-fetch-dest': 'iframe' }, redirect: 'manual',
+    });
+    assert.equal(nav.headers.get('location'), `${P}/about`);
   } finally {
     upstream.close();
-    proxy.close();
+    app.close();
   }
 });

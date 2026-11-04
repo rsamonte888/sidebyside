@@ -100,13 +100,20 @@
   });
 
   // --- navigation --------------------------------------------------------
-  function currentPath() { return location.pathname + location.search + location.hash; }
+  // Pages are served under /x/<site>/...; report paths without that prefix.
+  function prefix() {
+    var m = /^\/x\/[^/]+/.exec(location.pathname);
+    return m ? m[0] : '';
+  }
+  function currentPath() {
+    return (location.pathname.slice(prefix().length) || '/') + location.search + location.hash;
+  }
   var lastPath = null;
   function checkNav() {
     var p = currentPath();
     if (p === lastPath) return;
     lastPath = p;
-    post({ type: 'nav', path: p, title: document.title });
+    post({ type: 'nav', path: p, site: prefix().slice(3), title: document.title });
   }
   setInterval(checkNav, 200);
   window.addEventListener('popstate', checkNav);
@@ -125,14 +132,15 @@
   function navigate(path) {
     if (path === currentPath()) return;
     var router = getRouter();
+    // Nuxt 3/4 routers use the rewritten baseURL, so they accept bare paths.
     if (router) {
       try {
         var r = router.push(path);
-        if (r && r.catch) r.catch(function () { location.assign(path); });
+        if (r && r.catch) r.catch(function () { location.assign(prefix() + path); });
         return;
       } catch (e) { /* fall through */ }
     }
-    location.assign(path);
+    location.assign(prefix() + path);
   }
 
   window.addEventListener('message', function (e) {

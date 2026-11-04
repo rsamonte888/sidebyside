@@ -188,3 +188,24 @@ select { padding: 4px 6px; }
   .stage.split { flex-direction: column; }
   .stage.split .divider { width: auto; height: 1px; }
 }
+
+/* login */
+body.login { align-items: center; justify-content: center; }
+.login-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px;
+  width: min(360px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.login-card h1 { font-size: 18px; margin: 0; display: flex; align-items: center; gap: 3px; }
+.login-card h1 .dot:last-of-type { margin-right: 6px; }
+.login-card label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
+.login-card input {
+  font: inherit; color: inherit; background: var(--input);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+}
+.login-card .error { color: #dc2626; margin: 0; }

@@ -1,81 +1,88 @@
 # Side by Side
 
-A QA tool for comparing a **production** page with a new **Amplify** build of the same page. Both sites load next to each other and stay in sync:
+A web app for QA to compare a **production** page with a new **Amplify** build of the same page. Both sites load next to each other and stay in sync:
 
-- **Synced scrolling.** Scroll either side and the other follows. You can sync *by pixel* (same offset) or *by percent* (same relative position, useful when page heights differ).
-- **Synced navigation.** Click a link on either side and the other goes to the same path. For Nuxt (2, 3 and 4) this uses the app's own router, so there's no full reload.
+- **Synced scrolling.** Scroll either side and the other follows. You can sync *by pixel* (same offset) or *by percent* (same relative position, useful when page heights differ). **Align** snaps staging to live.
+- **Synced navigation.** Click a link on either side and the other goes to the same path. For Nuxt this uses the app's own router, so there's no full reload.
 - **Viewport presets.** Fit, 1920, 1440, 1280, 1024, 768, 390 and 360. Wide viewports are scaled down to fit the pane.
 - **Layouts.** Side by side, stacked, or **overlay** with a staging-opacity slider and a **Difference** mode. In Difference mode identical pixels turn black, so changes stand out.
-- **Shareable links.** *Copy link* captures both URLs, the path, the viewport and the layout, so QA can send an exact comparison in a ticket.
+- **Shareable links.** *Copy link* captures both sites, the path, the viewport and the layout. Paste it into a ticket.
+- **Team password.** A single shared password set with `APP_PASSWORD`.
 
 Nothing has to change on your website.
 
-## Quick start
+## Deploy
 
-Requires Node 18.17 or newer. There are no dependencies to install.
+It's a single Node server with no dependencies and no build step. Pick one option.
 
-```bash
-npm start
-```
+### Option A: Render (simplest, about 5 minutes)
 
-Open http://localhost:4000 and enter:
+1. In Render: **New → Blueprint**, then choose this GitHub repo. It reads `render.yaml`.
+2. Enter `APP_PASSWORD` and `ALLOWED_HOSTS` when prompted (see below).
+3. Optionally add a custom domain such as `sidebyside.yourco.com` under **Settings → Custom Domains**.
 
-| Field   | Example                                  |
-|---------|------------------------------------------|
-| Live    | `https://www.yoursite.com`               |
+### Option B: AWS (App Runner or ECS) or any container host
+
+Use the `Dockerfile`. The container listens on port `8080`. With App Runner: push the image to ECR, create a service from it, set the environment variables, and set the health check path to `/__sbs/health`. The same image runs on Google Cloud Run, Fly.io, Railway, or Kubernetes.
+
+> **Why not Amplify Hosting?** Amplify Hosting is built for static sites and framework SSR. This app is a long-running reverse proxy that streams other websites, so it belongs on a container or web-service host.
+
+### Environment variables
+
+| Variable | Required when hosted | Description |
+|----------|----------|-------------|
+| `APP_PASSWORD` | **yes** | Shared password for the team. Without it, anyone with the URL can use the proxy. |
+| `ALLOWED_HOSTS` | **yes** | Comma-separated hosts the proxy may load. Supports wildcards: `www.yoursite.com,yoursite.com,*.amplifyapp.com` |
+| `PORT` | set by host | Port to listen on (default `4000` locally) |
+| `PUBLIC_URL` | no | Public base URL, e.g. `https://sidebyside.yourco.com`. Only needed if your host doesn't send `X-Forwarded-Host`. |
+
+## Using it
+
+Open the app, sign in, and enter:
+
+| Field   | Example                                    |
+|---------|--------------------------------------------|
+| Live    | `https://www.yoursite.com`                 |
 | Staging | `https://feature-x.d1abc23.amplifyapp.com` |
-| Path    | `/products/some-product` (optional)      |
+| Path    | `/products/some-product` (optional)        |
 
 You can also paste a full page URL into **Live**. Its path is used for both sides.
 
 ## How it works
 
-Browsers block one page from reading or scrolling an iframe on another domain, and production sites usually refuse to be framed (`X-Frame-Options`, CSP `frame-ancestors`). To get around both, the server runs three listeners:
+Browsers block one page from reading or scrolling an iframe on another domain, and production sites usually refuse to be framed (`X-Frame-Options`, CSP `frame-ancestors`). So the app serves both sites from its own origin, each under its own path:
 
-| Port | Purpose |
-|------|---------|
-| 4000 | The comparison UI |
-| 4001 | Proxy for the **live** site |
-| 4002 | Proxy for the **staging** site |
+```
+https://sidebyside.yourco.com/x/www.yoursite.com/products/x
+https://sidebyside.yourco.com/x/feature-x.d1abc23.amplifyapp.com/products/x
+```
 
-Each proxy serves its site **at the same paths** (for example `localhost:4001/products/x` maps to `www.yoursite.com/products/x`), so Nuxt's router and hydration see the real route. On the way through, the proxy:
+On the way through, the proxy:
 
 - removes `X-Frame-Options`, CSP and other framing or isolation headers
-- rewrites absolute links to the site's own origin, including in `window.__NUXT__` payloads, so they point back at the proxy
-- keeps cookies on the proxy host by dropping `Domain`, and keeps redirects inside the proxy
-- injects `/__sbs/agent.js`, a small script that reports scroll and navigation to the UI with `postMessage` and applies commands from the other pane
-
-## Configuration (environment variables)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `4000` | UI port |
-| `LIVE_PORT` / `STAGING_PORT` | `4001` / `4002` | Proxy ports |
-| `HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` to expose on a network. |
-| `ALLOWED_HOSTS` | *(any)* | Comma-separated hosts the proxy may fetch, e.g. `www.yoursite.com,*.amplifyapp.com` |
-| `LIVE_PROXY_ORIGIN` / `STAGING_PROXY_ORIGIN` | *(derived)* | Public origins of the proxies when hosted, e.g. `https://live.sbs.yourco.com` |
-
-### Hosting it for the team
-
-The proxy will fetch any URL it's given, so if you expose it beyond localhost, **always set `ALLOWED_HOSTS`** and put it behind your SSO or VPN. A typical deployment uses three subdomains on one domain, all pointing at the same container:
-
-```
-sbs.yourco.com          -> :4000
-live.sbs.yourco.com     -> :4001   LIVE_PROXY_ORIGIN=https://live.sbs.yourco.com
-staging.sbs.yourco.com  -> :4002   STAGING_PROXY_ORIGIN=https://staging.sbs.yourco.com
-```
-
-Keep the subdomains under the same parent domain so the proxy's target cookie counts as same-site.
+- adds the `/x/<site>` prefix to root-relative URLs (`src="/…"`, `href="/…"`, `srcset`, `url(/…)`, the Nuxt import map) and rewrites absolute links to the site
+- sets Nuxt's runtime `app.baseURL` to the prefix, so Nuxt's router, `useFetch`/`$fetch`, payloads and lazy chunks all stay inside it, and hydration sees the right route
+- routes any request that still escapes the prefix (e.g. a hand-written `fetch('/api/…')`) to the correct site by its `Referer`
+- scopes each site's cookies to its own prefix, so live and staging sessions don't collide
+- injects `/__sbs/agent.js`, which reports scroll and navigation to the UI with `postMessage` and applies commands from the other pane
 
 ## Known limitations
 
-- **API calls to other domains.** If the site calls an API on a different domain (e.g. `api.yoursite.com`) from the browser, that API sees a `localhost` origin and may reject it through CORS. Same-origin `/api/...` calls work because they go through the proxy.
-- **Shared cookies on localhost.** Browsers ignore the port when storing cookies, so live and staging share one cookie jar on `localhost`. A login on one side can affect the other. Hosting on separate subdomains avoids this.
-- **Third-party embeds** (maps, video, some analytics or consent widgets) may refuse to load or behave differently from a non-production origin.
-- **Amplify password protection** works: the browser shows its basic-auth prompt inside the staging pane.
-- **Service workers** registered by a site are scoped to the proxy port. If you switch to a different site on the same port and see stale content, clear site data for `localhost:4001` or `localhost:4002`.
+- **APIs on other domains.** If the site calls an API on a different domain (e.g. `api.yoursite.com`) from the browser, that API sees the Side by Side origin and may reject it through CORS. Same-origin `/api/...` calls work.
+- **Third-party embeds** (maps, video, some analytics, consent or chat widgets) may refuse to load or behave differently from a non-production domain.
+- **Absolute URLs built in JavaScript** at runtime from hard-coded strings other than the site's own origin are not rewritten.
+- **Amplify password-protected branches** work: the browser shows its basic-auth prompt inside the staging pane.
+- **Nuxt 2** works for display and scroll sync, but its router base is compiled into the bundle, so client-side navigation sync falls back to full page loads.
 
-## Development
+## Run locally
+
+Requires Node 18.17 or newer.
+
+```bash
+npm start
+```
+
+Then open http://localhost:4000.
 
 ```bash
 npm test
@@ -83,6 +90,7 @@ npm test
 
 Files:
 
-- `server.js`: the UI server and the two proxies
+- `server.js`: the HTTP server, proxy, rewriting and login
 - `public/index.html`, `public/app.js`, `public/styles.css`: the comparison UI
 - `public/agent.js`: the script injected into each proxied page
+- `Dockerfile`, `render.yaml`: deployment

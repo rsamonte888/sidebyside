@@ -30,7 +30,6 @@
   });
   var other = function (role) { return role === 'live' ? 'staging' : 'live'; };
 
-  var proxyOrigins = null; // { live, staging } from /api/config
   var leader = null;       // role the user is currently driving
   var pendingAlign = false;
 
@@ -54,6 +53,16 @@
     try { return new URL(raw); } catch (e) { return null; }
   }
 
+  // Mirrors encodeSite/decodeSite in server.js.
+  function encodeSite(origin) {
+    var u = new URL(origin);
+    return (u.protocol === 'http:' ? 'http:' : '') + u.host.toLowerCase();
+  }
+  function decodeSite(seg) {
+    seg = decodeURIComponent(seg || '');
+    return seg.indexOf('http:') === 0 ? 'http://' + seg.slice(5) : 'https://' + seg;
+  }
+
   function normalizePath(p) {
     p = (p || '').trim();
     if (!p) return '/';
@@ -69,8 +78,7 @@
     var pane = panes[role];
     pane.path = path;
     updateLabel(role);
-    var target = pane.origin + path;
-    pane.iframe.src = proxyOrigins[role] + '/__sbs/start?target=' + encodeURIComponent(target);
+    pane.iframe.src = '/x/' + encodeSite(pane.origin) + path;
   }
 
   function updateLabel(role) {
@@ -112,7 +120,7 @@
   function send(role, msg) {
     msg.__sbs = 1;
     var w = panes[role].iframe.contentWindow;
-    if (w) w.postMessage(msg, proxyOrigins[role]);
+    if (w) w.postMessage(msg, location.origin);
   }
 
   function setLeader(role) {
@@ -126,7 +134,7 @@
     if (!msg || msg.__sbs !== 1) return;
     var role = null;
     ROLES.forEach(function (r) {
-      if (e.source === panes[r].iframe.contentWindow && e.origin === proxyOrigins[r]) role = r;
+      if (e.source === panes[r].iframe.contentWindow && e.origin === location.origin) role = r;
     });
     if (!role) return;
 
@@ -151,6 +159,8 @@
 
       case 'nav':
         panes[role].path = msg.path;
+        // The site can change on redirect, e.g. example.com -> www.example.com.
+        if (msg.site) panes[role].origin = decodeSite(msg.site);
         updateLabel(role);
         if (role === leader) {
           els.path.value = msg.path === '/' ? '' : msg.path;
@@ -254,14 +264,7 @@
     setSelect(els.layout, q.get('layout') || store.get('layout'));
     setSelect(els.scrollMode, q.get('mode') || store.get('mode'));
     applyLayout();
-
-    fetch('api/config')
-      .then(function (r) { return r.json(); })
-      .then(function (cfg) {
-        proxyOrigins = cfg;
-        if (q.get('live') && q.get('staging')) compare();
-      })
-      .catch(function () { toast('Could not reach the Side by Side server'); });
+    if (q.get('live') && q.get('staging')) compare();
   }
 
   init();

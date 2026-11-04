@@ -1,16 +1,20 @@
 // Side by Side — compare a live site and a staging (Amplify) build.
 //
-// Three HTTP listeners:
-//   PORT          the comparison UI (public/)
-//   LIVE_PORT     reverse proxy for the live site
-//   STAGING_PORT  reverse proxy for the staging site
+// One HTTP server, one origin:
+//   /                       the comparison UI
+//   /__sbs/...              UI assets, agent script, login
+//   /x/<site>/<path>        reverse proxy: <site>'s <path>
 //
-// Each proxy serves the target site on its own origin with the *same paths*
-// (so Nuxt's router and hydration see the real route), strips headers that
-// block framing, rewrites absolute links back to the proxy, and injects a
-// small agent script that reports scroll/navigation to the UI via postMessage.
+// <site> is the target host ("www.example.com" = https, "http:host:port" =
+// plain http). Proxied pages are rewritten so they work under the /x/<site>
+// prefix: root-relative URLs get the prefix, absolute links back to the site
+// point at the proxy, and Nuxt's runtime `app.baseURL` is set to the prefix so
+// its router, $fetch and asset loader all stay inside it. Framing headers are
+// removed and a small agent script is injected that reports scroll/navigation
+// to the UI via postMessage.
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import path from 'node:path';
@@ -20,23 +24,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 export const config = {
-  host: process.env.HOST || '127.0.0.1',
+  host: process.env.HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1'),
   port: Number(process.env.PORT) || 4000,
-  livePort: Number(process.env.LIVE_PORT) || 4001,
-  stagingPort: Number(process.env.STAGING_PORT) || 4002,
-  // When deployed behind a reverse proxy / subdomains, set the public origins
-  // the browser should use for each proxy, e.g. https://live.sbs.example.com
-  liveProxyOrigin: process.env.LIVE_PROXY_ORIGIN || '',
-  stagingProxyOrigin: process.env.STAGING_PROXY_ORIGIN || '',
+  // Shared password for the team. Strongly recommended when hosted.
+  password: process.env.APP_PASSWORD || '',
   // Comma-separated hostnames the proxy may fetch. Supports "*.amplifyapp.com".
-  allowedHosts: (process.env.ALLOWED_HOSTS || '')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean),
+  allowedHosts: parseList(process.env.ALLOWED_HOSTS),
+  // Optional: public base URL when the Host header can't be trusted.
+  publicUrl: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
 };
 
+function parseList(s) {
+  return (s || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+}
+
 // ---------------------------------------------------------------------------
-// helpers
+// sites & URLs
 
 export function hostAllowed(hostname, allowed = config.allowedHosts) {
   if (!allowed.length) return true;
@@ -46,78 +49,119 @@ export function hostAllowed(hostname, allowed = config.allowedHosts) {
   );
 }
 
-export function parseTarget(raw) {
-  if (!raw) return { error: 'Missing target URL' };
-  let url;
-  try {
-    url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
-  } catch {
-    return { error: `Invalid URL: ${raw}` };
-  }
-  if (!/^https?:$/.test(url.protocol)) return { error: 'Only http(s) URLs are supported' };
-  if (!hostAllowed(url.hostname)) return { error: `Host not allowed: ${url.hostname}` };
-  return { url };
+/** https://www.a.com -> "www.a.com"; http://localhost:3000 -> "http:localhost:3000" */
+export function encodeSite(origin) {
+  const u = new URL(origin);
+  return (u.protocol === 'http:' ? 'http:' : '') + u.host.toLowerCase();
 }
 
+/** Inverse of encodeSite. Returns an origin string or null. */
+export function decodeSite(seg) {
+  if (!seg) return null;
+  let s = decodeURIComponent(seg);
+  let proto = 'https:';
+  if (s.startsWith('http:')) { proto = 'http:'; s = s.slice(5); }
+  if (!/^[a-z0-9.-]+(:\d{1,5})?$/i.test(s)) return null;
+  const origin = `${proto}//${s.toLowerCase()}`;
+  return hostAllowed(new URL(origin).hostname) ? origin : null;
+}
+
+const SITE_PREFIX = /^\/x\/([^/]+)(\/.*)?$/;
+
+/** Parse "/x/<site>/rest?q" -> { site, origin, prefix, rest } */
+export function parseProxyPath(pathname) {
+  const m = SITE_PREFIX.exec(pathname);
+  if (!m) return null;
+  const origin = decodeSite(m[1]);
+  if (!origin) return null;
+  return { site: m[1], origin, prefix: `/x/${m[1]}`, rest: m[2] || '/' };
+}
+
+// ---------------------------------------------------------------------------
+// rewriting
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const stripWww = (h) => h.replace(/^www\./i, '');
+
+/** Replace absolute references to the target origin with proxyBase (origin + prefix). */
+export function rewriteOrigins(text, targetOrigin, proxyBase) {
+  const t = new URL(targetOrigin);
+  const p = new URL(proxyBase);
+  const end = '(?![\\w.-])'; // don't match a.com inside a.com.au
+  const host = escapeRe(t.host);
+  const protoRel = `//${p.host}${p.pathname.replace(/\/$/, '')}`;
+  return text
+    .replace(new RegExp(`https?://${host}${end}`, 'gi'), () => proxyBase)
+    .replace(new RegExp(`https?:\\\\/\\\\/${host}${end}`, 'gi'), () => proxyBase.replace(/\//g, '\\/'))
+    .replace(new RegExp(`(["'=(\\s])//${host}${end}`, 'gi'), (_, c) => c + protoRel);
+}
+
+/** Prefix root-relative URLs ("/foo", not "//foo") in HTML. */
+export function rewriteHtmlPaths(html, prefix) {
+  const P = prefix;
+  return html
+    // src="/..", href="/..", action, poster, data-src, formaction
+    .replace(/(\s(?:src|href|action|poster|data-src|formaction)\s*=\s*["'])\/(?![/\\])/gi, `$1${P}/`)
+    // srcset="/a.jpg 1x, /b.jpg 2x"
+    .replace(/(\s(?:srcset|data-srcset|imagesrcset)\s*=\s*["'])([^"']*)/gi, (_, a, v) =>
+      a + v.replace(/(^|,\s*)\/(?![/\\])/g, `$1${P}/`))
+    // url(/..) in inline styles
+    .replace(/url\(\s*(["']?)\/(?![/\\])/gi, `url($1${P}/`)
+    // <script type="importmap">{"imports":{"#entry":"/_nuxt/x.js"}}
+    .replace(/(<script[^>]*type=["']importmap["'][^>]*>)([\s\S]*?)(<\/script>)/gi, (_, a, body, c) =>
+      a + body.replace(/:\s*"\/(?!\/)/g, `:"${P}/`) + c)
+    // Nuxt 3/4 runtime config: app.baseURL; Nuxt 2: app.basePath / assetsPath
+    .replace(/((?:baseURL|basePath|assetsPath)["']?\s*:\s*["'])\/(?!\/)/g, `$1${P}/`)
+    // CSP / referrer meta tags would block the agent or our fallback routing
+    .replace(/<meta[^>]+http-equiv=["']?content-security-policy["']?[^>]*>/gi, '')
+    .replace(/<meta[^>]+name=["']?referrer["']?[^>]*>/gi, '');
+}
+
+export function rewriteCssPaths(css, prefix) {
+  return css.replace(/url\(\s*(["']?)\/(?![/\\])/gi, `url($1${prefix}/`);
+}
+
+export function injectAgent(html) {
+  const tag = '<script src="/__sbs/agent.js"></script>';
+  return /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + tag) : tag + html;
+}
+
+// ---------------------------------------------------------------------------
+// auth (optional shared password)
+
+const AUTH_COOKIE = '__sbs_auth';
+const authToken = () => crypto.createHmac('sha256', config.password).update('sidebyside').digest('hex');
+
 function readCookie(req, name) {
-  const header = req.headers.cookie || '';
-  for (const part of header.split(';')) {
+  for (const part of (req.headers.cookie || '').split(';')) {
     const [k, ...v] = part.trim().split('=');
     if (k === name) return decodeURIComponent(v.join('='));
   }
   return null;
 }
 
-function stripOwnCookies(header) {
-  return header
-    .split(';')
-    .map((s) => s.trim())
-    .filter((s) => s && !s.startsWith('__sbs_'))
-    .join('; ');
+function isAuthed(req) {
+  if (!config.password) return true;
+  const got = readCookie(req, AUTH_COOKIE) || '';
+  const want = authToken();
+  return got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
 }
 
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const stripWww = (h) => h.replace(/^www\./i, '');
-
-/** Replace absolute references to the target origin with the proxy origin. */
-export function rewriteOrigins(text, targetOrigin, proxyOrigin) {
-  const t = new URL(targetOrigin);
-  const p = new URL(proxyOrigin);
-  const end = '(?![\\w.-])'; // don't match prod.com inside prod.com.au
-  const host = escapeRe(t.host);
-  return text
-    // https://host and http://host
-    .replace(new RegExp(`https?://${host}${end}`, 'gi'), p.origin)
-    // JSON-escaped: https:\/\/host
-    .replace(new RegExp(`https?:\\\\/\\\\/${host}${end}`, 'gi'), p.origin.replace(/\//g, '\\/'))
-    // protocol-relative: //host (only after a quote, = , ( or whitespace)
-    .replace(new RegExp(`(["'=(\\s])//${host}${end}`, 'gi'), `$1//${p.host}`);
+function loginPage(error) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Side by Side</title><link rel="stylesheet" href="/__sbs/ui/styles.css"></head>
+<body class="login"><form method="post" action="/__sbs/login" class="login-card">
+<h1><span class="dot live"></span><span class="dot staging"></span> Side by Side</h1>
+<label>Team password<input type="password" name="password" autofocus required></label>
+${error ? '<p class="error">Wrong password</p>' : ''}
+<button class="primary" type="submit">Sign in</button></form></body></html>`;
 }
 
-export function injectAgent(html) {
-  const tag = '<script src="/__sbs/agent.js"></script>';
-  // A CSP meta tag would block the agent and is pointless inside the tool.
-  html = html.replace(/<meta[^>]+http-equiv=["']?content-security-policy["']?[^>]*>/gi, '');
-  return /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + tag) : tag + html;
-}
+// ---------------------------------------------------------------------------
+// helpers
 
-const HOP_BY_HOP = new Set([
-  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
-  'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length',
-  'accept-encoding',
-]);
-
-const DROP_RESPONSE = new Set([
-  'connection', 'keep-alive', 'transfer-encoding', 'content-encoding', 'content-length',
-  'x-frame-options', 'content-security-policy', 'content-security-policy-report-only',
-  'strict-transport-security', 'cross-origin-opener-policy', 'cross-origin-embedder-policy',
-  'cross-origin-resource-policy', 'clear-site-data', 'alt-svc', 'set-cookie',
-]);
-
-const TEXT_TYPES = /text\/html|javascript|json|text\/css|xml/i;
-
-function send(res, status, body, type = 'text/plain; charset=utf-8') {
-  res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
+function send(res, status, body, type = 'text/plain; charset=utf-8', extra = {}) {
+  res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...extra });
   res.end(body);
 }
 
@@ -128,82 +172,60 @@ function errorPage(title, detail) {
 <h2 style="margin:0 0 8px">${esc(title)}</h2><p style="color:#666">${esc(detail)}</p></body>`;
 }
 
-async function readBody(req) {
+async function readBody(req, limit = 10 * 1024 * 1024) {
   const chunks = [];
-  for await (const c of req) chunks.push(c);
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > limit) throw new Error('Request body too large');
+    chunks.push(c);
+  }
   return Buffer.concat(chunks);
 }
 
-function proxyOriginFor(req, role) {
-  const fixed = role === 'live' ? config.liveProxyOrigin : config.stagingProxyOrigin;
-  if (fixed) return fixed.replace(/\/$/, '');
+function publicOrigin(req) {
+  if (config.publicUrl) return config.publicUrl;
   const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim();
-  return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`;
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost').split(',')[0].trim();
+  return `${proto}://${host}`;
 }
 
 // ---------------------------------------------------------------------------
 // proxy
 
-export function createProxyHandler(role) {
-  const cookieName = `__sbs_${role}`;
-  // Fallback for requests that arrive without our cookie (e.g. cookies blocked).
-  let lastTarget = null;
+const HOP_BY_HOP = new Set([
+  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer',
+  'transfer-encoding', 'upgrade', 'host', 'content-length', 'accept-encoding',
+]);
 
-  return async function handle(req, res) {
-    const reqUrl = new URL(req.url, 'http://placeholder');
-    const proxyOrigin = proxyOriginFor(req, role);
+const DROP_RESPONSE = new Set([
+  'connection', 'keep-alive', 'transfer-encoding', 'content-encoding', 'content-length',
+  'x-frame-options', 'content-security-policy', 'content-security-policy-report-only',
+  'strict-transport-security', 'cross-origin-opener-policy', 'cross-origin-embedder-policy',
+  'cross-origin-resource-policy', 'clear-site-data', 'alt-svc', 'set-cookie', 'referrer-policy',
+  'service-worker-allowed',
+]);
 
-    try {
-      if (reqUrl.pathname === '/__sbs/agent.js') {
-        const js = await readFile(path.join(PUBLIC_DIR, 'agent.js'));
-        res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(js);
-      }
+const TEXT_TYPES = /text\/html|javascript|json|text\/css|xml/i;
 
-      if (reqUrl.pathname === '/__sbs/start') {
-        const { url, error } = parseTarget(reqUrl.searchParams.get('target'));
-        if (error) return send(res, 400, errorPage('Cannot open site', error), 'text/html; charset=utf-8');
-        lastTarget = url.origin;
-        const secure = proxyOrigin.startsWith('https:');
-        res.writeHead(302, {
-          'set-cookie': `${cookieName}=${encodeURIComponent(url.origin)}; Path=/; HttpOnly; SameSite=${secure ? 'None; Secure' : 'Lax'}`,
-          location: url.pathname + url.search + url.hash,
-          'cache-control': 'no-store',
-        });
-        return res.end();
-      }
-
-      let target = readCookie(req, cookieName) || lastTarget;
-      if (target && parseTarget(target).error) target = null;
-      if (!target) {
-        return send(res, 400, errorPage('No site selected', 'Open this proxy from the Side by Side app.'), 'text/html; charset=utf-8');
-      }
-
-      await forward(req, res, { target, proxyOrigin, reqUrl });
-    } catch (err) {
-      console.error(`[${role}] ${req.method} ${req.url}:`, err.message);
-      if (!res.headersSent) {
-        send(res, 502, errorPage('Could not reach the site', err.cause?.message || err.message), 'text/html; charset=utf-8');
-      } else {
-        res.destroy();
-      }
-    }
-  };
-}
-
-async function forward(req, res, { target, proxyOrigin, reqUrl }) {
-  const upstreamUrl = new URL(reqUrl.pathname + reqUrl.search, target);
+async function proxy(req, res, { origin, prefix, rest, search }) {
+  const self = publicOrigin(req);
+  const proxyBase = self + prefix;
+  const upstreamUrl = new URL(rest + search, origin);
 
   const headers = new Headers();
   for (const [key, value] of Object.entries(req.headers)) {
-    if (HOP_BY_HOP.has(key) || key.startsWith('x-forwarded-')) continue;
+    if (HOP_BY_HOP.has(key) || key.startsWith('x-forwarded-') || key.startsWith('cf-')) continue;
     let v = Array.isArray(value) ? value.join(', ') : value;
     if (key === 'cookie') {
-      v = stripOwnCookies(v);
+      v = v.split(';').map((s) => s.trim()).filter((s) => s && !s.startsWith('__sbs_')).join('; ');
       if (!v) continue;
     }
-    if (key === 'origin') v = target;
-    if (key === 'referer') v = v.replace(proxyOrigin, target);
+    if (key === 'origin') v = origin;
+    if (key === 'referer') {
+      const ref = parseRef(v, self);
+      v = ref ? ref.origin + ref.rest : origin + '/';
+    }
     headers.set(key, v);
   }
   headers.set('accept-encoding', 'gzip, deflate, br');
@@ -221,33 +243,30 @@ async function forward(req, res, { target, proxyOrigin, reqUrl }) {
     if (!DROP_RESPONSE.has(key)) out[key] = value;
   });
 
-  // Cookies: drop Domain so they stick to the proxy host; relax Secure on http.
-  const insecure = proxyOrigin.startsWith('http:');
+  // Cookies: scope them to this site's prefix so live and staging don't collide.
+  const insecure = self.startsWith('http:');
   const cookies = upstream.headers.getSetCookie().map((c) => {
     let v = c.replace(/;\s*domain=[^;]*/gi, '');
+    if (/;\s*path=/i.test(v)) v = v.replace(/;\s*path=\/?([^;]*)/i, (_, p) => `; Path=${prefix}/${p}`);
+    else v += `; Path=${prefix}/`;
     if (insecure) v = v.replace(/;\s*secure/gi, '').replace(/;\s*samesite=none/gi, '; SameSite=Lax');
     return v;
   });
   if (cookies.length) out['set-cookie'] = cookies;
 
-  // Redirects: keep the iframe inside the proxy.
+  // Redirects: keep the frame inside the proxy.
   if (out.location) {
     const loc = new URL(out.location, upstreamUrl);
-    if (loc.origin === target) {
-      out.location = loc.pathname + loc.search + loc.hash;
-    } else if (
-      /^https?:$/.test(loc.protocol) &&
-      stripWww(loc.hostname) === stripWww(new URL(target).hostname) &&
-      hostAllowed(loc.hostname)
-    ) {
-      // e.g. example.com -> www.example.com: re-target this proxy.
-      out.location = `/__sbs/start?target=${encodeURIComponent(loc.href)}`;
+    const sameSite = loc.origin === origin;
+    const sibling = /^https?:$/.test(loc.protocol) &&
+      stripWww(loc.hostname) === stripWww(new URL(origin).hostname) && hostAllowed(loc.hostname);
+    if (sameSite || sibling) {
+      out.location = `/x/${encodeSite(loc.origin)}${loc.pathname}${loc.search}${loc.hash}`;
     }
   }
 
-  // Hashed Nuxt build assets are safe to cache; everything else isn't, because
-  // the same proxy port may point at a different site next time.
-  if (!reqUrl.pathname.startsWith('/_nuxt/')) {
+  // Only hashed Nuxt build assets are safe to cache.
+  if (!rest.startsWith('/_nuxt/')) {
     out['cache-control'] = 'no-store';
     delete out.etag;
     delete out['last-modified'];
@@ -260,8 +279,9 @@ async function forward(req, res, { target, proxyOrigin, reqUrl }) {
   }
 
   if (TEXT_TYPES.test(type)) {
-    let text = rewriteOrigins(await upstream.text(), target, proxyOrigin);
-    if (/text\/html/i.test(type)) text = injectAgent(text);
+    let text = rewriteOrigins(await upstream.text(), origin, proxyBase);
+    if (/text\/html/i.test(type)) text = injectAgent(rewriteHtmlPaths(text, prefix));
+    else if (/text\/css/i.test(type)) text = rewriteCssPaths(text, prefix);
     const buf = Buffer.from(text, 'utf8');
     out['content-length'] = buf.length;
     res.writeHead(upstream.status, out);
@@ -272,65 +292,110 @@ async function forward(req, res, { target, proxyOrigin, reqUrl }) {
   Readable.fromWeb(upstream.body).pipe(res);
 }
 
+/** If `referer` is a proxied page on this server, return its parsed site info. */
+function parseRef(referer, self) {
+  try {
+    const u = new URL(referer);
+    if (u.origin !== new URL(self).origin) return null;
+    const p = parseProxyPath(u.pathname);
+    return p && { ...p, rest: p.rest + u.search };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
-// UI server
+// request handler
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-};
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
-export function createUiHandler() {
+async function serveStatic(res, file) {
+  const full = path.normalize(path.join(PUBLIC_DIR, file));
+  if (!full.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, 'Not found');
+  try {
+    const body = await readFile(full);
+    res.writeHead(200, { 'content-type': MIME[path.extname(full)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    res.end(body);
+  } catch {
+    send(res, 404, 'Not found');
+  }
+}
+
+export function createHandler() {
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://placeholder');
+    const { pathname, search } = url;
+    const secure = publicOrigin(req).startsWith('https:');
 
-    if (url.pathname === '/api/config') {
-      const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim();
-      const hostname = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost').replace(/:\d+$/, '');
-      return send(res, 200, JSON.stringify({
-        live: config.liveProxyOrigin || `${proto}://${hostname}:${config.livePort}`,
-        staging: config.stagingProxyOrigin || `${proto}://${hostname}:${config.stagingPort}`,
-      }), 'application/json');
-    }
-
-    const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-    const full = path.normalize(path.join(PUBLIC_DIR, file));
-    if (!full.startsWith(PUBLIC_DIR + path.sep) || file === 'agent.js') return send(res, 404, 'Not found');
     try {
-      const body = await readFile(full);
-      res.writeHead(200, { 'content-type': MIME[path.extname(full)] || 'application/octet-stream', 'cache-control': 'no-cache' });
-      res.end(body);
-    } catch {
-      send(res, 404, 'Not found');
+      if (pathname === '/__sbs/health') return send(res, 200, 'ok');
+      if (pathname === '/__sbs/ui/styles.css') return serveStatic(res, 'styles.css');
+
+      if (pathname === '/__sbs/login') {
+        if (req.method === 'POST') {
+          const form = new URLSearchParams((await readBody(req, 10_000)).toString());
+          const ok = config.password && form.get('password') === config.password;
+          if (!ok) return send(res, 401, loginPage(true), 'text/html; charset=utf-8');
+          res.writeHead(303, {
+            location: '/',
+            'set-cookie': `${AUTH_COOKIE}=${authToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secure ? '; Secure' : ''}`,
+          });
+          return res.end();
+        }
+        return send(res, 200, loginPage(false), 'text/html; charset=utf-8');
+      }
+
+      if (!isAuthed(req)) {
+        if (pathname === '/') return res.writeHead(303, { location: '/__sbs/login' }).end();
+        return send(res, 401, errorPage('Signed out', 'Reload the Side by Side app and sign in.'), 'text/html; charset=utf-8');
+      }
+
+      if (pathname === '/__sbs/agent.js') return serveStatic(res, 'agent.js');
+      if (pathname === '/__sbs/ui/app.js') return serveStatic(res, 'app.js');
+      if (pathname === '/__sbs/logout') {
+        return res.writeHead(303, { location: '/', 'set-cookie': `${AUTH_COOKIE}=; Path=/; Max-Age=0` }).end();
+      }
+
+      const site = parseProxyPath(pathname);
+      if (site) return await proxy(req, res, { ...site, search });
+      if (pathname.startsWith('/x/')) {
+        return send(res, 403, errorPage('Site not allowed', 'This host is not in ALLOWED_HOSTS.'), 'text/html; charset=utf-8');
+      }
+
+      // A root-relative request that escaped the rewriting, e.g. fetch('/api/x')
+      // or <img src="/a.png"> rendered client-side. Route it by its Referer.
+      const ref = req.headers.referer && parseRef(req.headers.referer, publicOrigin(req));
+      if (ref) {
+        const dest = req.headers['sec-fetch-dest'];
+        if (dest === 'document' || dest === 'iframe') {
+          // A navigation: redirect so the frame's URL keeps the prefix.
+          return res.writeHead(302, { location: ref.prefix + pathname + search }).end();
+        }
+        return await proxy(req, res, { ...ref, rest: pathname, search });
+      }
+
+      if (pathname === '/' || pathname === '/index.html') return serveStatic(res, 'index.html');
+      return send(res, 404, 'Not found');
+    } catch (err) {
+      console.error(`${req.method} ${req.url}:`, err.message);
+      if (!res.headersSent) {
+        send(res, 502, errorPage('Could not reach the site', err.cause?.message || err.message), 'text/html; charset=utf-8');
+      } else {
+        res.destroy();
+      }
     }
   };
 }
 
-// ---------------------------------------------------------------------------
-
-function listen(handler, port, label) {
-  return new Promise((resolve) => {
-    const server = http.createServer(handler);
-    server.listen(port, config.host, () => {
-      console.log(`  ${label.padEnd(9)} http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${port}`);
-      resolve(server);
-    });
+export function start() {
+  const server = http.createServer(createHandler());
+  server.listen(config.port, config.host, () => {
+    const shown = config.host === '0.0.0.0' ? 'localhost' : config.host;
+    console.log(`Side by Side running at http://${shown}:${config.port}`);
+    if (!config.password) console.warn('  APP_PASSWORD is not set: anyone who can reach this server can use it.');
+    if (!config.allowedHosts.length) console.warn('  ALLOWED_HOSTS is not set: the proxy will fetch any site.');
   });
-}
-
-export async function start() {
-  console.log('Side by Side');
-  const servers = await Promise.all([
-    listen(createUiHandler(), config.port, 'App'),
-    listen(createProxyHandler('live'), config.livePort, 'Live'),
-    listen(createProxyHandler('staging'), config.stagingPort, 'Staging'),
-  ]);
-  if (!['127.0.0.1', 'localhost', '::1'].includes(config.host) && !config.allowedHosts.length) {
-    console.warn('\n  WARNING: listening publicly without ALLOWED_HOSTS — this is an open proxy.\n');
-  }
-  return servers;
+  return server;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

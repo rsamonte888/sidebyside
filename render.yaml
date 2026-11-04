@@ -1,0 +1,14 @@
+# One-click deploy on Render: Dashboard -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: sidebyside
+    runtime: node
+    plan: starter # the free plan sleeps after 15 min idle (≈1 min cold start)
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /__sbs/health
+    envVars:
+      - key: APP_PASSWORD
+        sync: false # Render asks for it during setup
+      - key: ALLOWED_HOSTS
+        sync: false # e.g. www.yoursite.com,yoursite.com,*.amplifyapp.com
