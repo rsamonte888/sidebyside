@@ -342,3 +342,21 @@ body.login { align-items: center; justify-content: center; }
   .workspace { flex-direction: column; }
   .notes-panel { width: auto; border-left: 0; border-top: 1px solid var(--border); max-height: 45vh; }
 }
+
+/* view: both / live only / staging only */
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; padding: 4px 10px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; position: relative; }
+.stage.solo .divider { display: none; }
+/* Keep the hidden pane laid out at full size so it stays scroll-synced. */
+.stage.solo-live .pane[data-role="staging"],
+.stage.solo-staging .pane[data-role="live"] {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+select:disabled { opacity: .5; cursor: not-allowed; }

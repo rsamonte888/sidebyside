@@ -207,10 +207,44 @@
   var ro = new ResizeObserver(layoutViewports);
   ROLES.forEach(function (r) { ro.observe(panes[r].host); });
 
+  // --- view: both panes, or one pane full width ---------------------------
+  // The hidden pane keeps loading and syncing out of sight, so switching
+  // back to "Both" lines up immediately.
+  var view = 'both';
+  var viewButtons = document.querySelectorAll('[data-view]');
+
+  function setView(v, initial) {
+    view = v === 'live' || v === 'staging' ? v : 'both';
+    store.set('view', view);
+    viewButtons.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
+    ROLES.forEach(function (r) {
+      var btn = panes[r].el.querySelector('[data-solo]');
+      var solo = view === r;
+      btn.textContent = solo ? '⤡' : '⤢';
+      btn.title = solo ? 'Show both' : 'Full view';
+    });
+    if (view !== 'both') setLeader(view);
+    applyLayout();
+    if (!initial) syncQuery();
+  }
+  viewButtons.forEach(function (b) {
+    b.addEventListener('click', function () { setView(b.dataset.view); });
+  });
+  ROLES.forEach(function (r) {
+    panes[r].el.querySelector('[data-solo]').addEventListener('click', function () {
+      setView(view === r ? 'both' : r);
+    });
+  });
+
   function applyLayout() {
-    var layout = els.layout.value;
-    els.stage.classList.remove('split', 'stack', 'overlay');
+    // A single pane is always shown full size, whatever the layout.
+    var solo = view !== 'both';
+    var layout = solo ? 'split' : els.layout.value;
+    els.stage.classList.remove('split', 'stack', 'overlay', 'solo', 'solo-live', 'solo-staging');
     els.stage.classList.add(layout);
+    if (solo) els.stage.classList.add('solo', 'solo-' + view);
+    els.layout.disabled = solo;
+    els.layout.title = solo ? 'Switch the view back to Both to change the layout' : '';
     var overlay = layout === 'overlay';
     els.overlayControls.hidden = !overlay;
     els.stage.classList.toggle('difference', overlay && els.difference.checked);
@@ -231,6 +265,7 @@
     if (els.viewport.value !== 'fit') q.set('vp', els.viewport.value);
     if (els.layout.value !== 'split') q.set('layout', els.layout.value);
     if (els.scrollMode.value !== 'px') q.set('mode', els.scrollMode.value);
+    if (view !== 'both') q.set('view', view);
     var qs = q.toString();
     history.replaceState(null, '', qs ? '?' + qs : location.pathname);
   }
@@ -263,7 +298,7 @@
     setSelect(els.viewport, q.get('vp') || store.get('vp'));
     setSelect(els.layout, q.get('layout') || store.get('layout'));
     setSelect(els.scrollMode, q.get('mode') || store.get('mode'));
-    applyLayout();
+    setView(q.get('view') || store.get('view'), true);
 
     // The page itself is static; the proxy checks the team password.
     fetch('/__sbs/me', { credentials: 'same-origin' })

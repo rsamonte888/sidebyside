@@ -42,6 +42,14 @@
 
       <span class="sep"></span>
 
+      <span class="seg" role="group" aria-label="View">
+        <button type="button" data-view="both" class="active" title="Show live and staging">Both</button>
+        <button type="button" data-view="live" title="Show only the live site, full width">Live only</button>
+        <button type="button" data-view="staging" title="Show only staging, full width">Staging only</button>
+      </span>
+
+      <span class="sep"></span>
+
       <label class="select">Viewport
         <select id="viewport">
           <option value="fit">Fit pane</option>
@@ -82,6 +90,7 @@
       <div class="pane-bar">
         <span class="tag live">Live</span>
         <span class="pane-url" data-url>—</span>
+        <button type="button" data-solo title="Full view">⤢</button>
         <button type="button" data-reload title="Reload">↻</button>
         <a data-open target="_blank" rel="noopener" title="Open the real page in a new tab">↗</a>
       </div>
@@ -92,6 +101,7 @@
       <div class="pane-bar">
         <span class="tag staging">Staging</span>
         <span class="pane-url" data-url>—</span>
+        <button type="button" data-solo title="Full view">⤢</button>
         <button type="button" data-reload title="Reload">↻</button>
         <a data-open target="_blank" rel="noopener" title="Open the real page in a new tab">↗</a>
       </div>
