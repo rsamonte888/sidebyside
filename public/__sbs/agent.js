@@ -99,6 +99,11 @@
     }, { capture: true, passive: true });
   });
 
+  // Esc inside the page should still reach the app (e.g. to stop drawing).
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') post({ type: 'escape' });
+  }, true);
+
   // --- navigation --------------------------------------------------------
   // Pages are served under /x/<site>/...; report paths without that prefix.
   function prefix() {
@@ -203,6 +208,11 @@
     if (msg.type === 'scrollTo') scrollTo(msg);
     else if (msg.type === 'navigate') navigate(msg.path);
     else if (msg.type === 'click') replayClick(msg);
+    else if (msg.type === 'scrollBy') {
+      // Wheel scrolling forwarded from the app while an annotation tool is on.
+      if (scroller && document.contains(scroller)) scroller.scrollBy(msg.dx, msg.dy);
+      else window.scrollBy({ left: msg.dx, top: msg.dy, behavior: 'instant' });
+    }
     else if (msg.type === 'ping') {
       var m = metrics(); m.type = 'scroll'; post(m);
       lastPath = null; checkNav();

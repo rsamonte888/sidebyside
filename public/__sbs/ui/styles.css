@@ -249,7 +249,7 @@ body.login { align-items: center; justify-content: center; }
 /* overlay above both panes */
 /* one layer per pane, clipped to that pane */
 .ann-layer { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
-.stage:not([data-tool="scroll"]) .ann-layer { pointer-events: auto; cursor: crosshair; }
+.stage:not([data-ann-tool="scroll"]) .ann-layer { pointer-events: auto; cursor: crosshair; }
 .ann-layer .draft { position: absolute; border: 3px dashed var(--ann); background: rgba(225, 29, 72, .08); }
 
 .ann { position: absolute; pointer-events: none; }
@@ -390,3 +390,24 @@ body.login { align-items: center; justify-content: center; }
   z-index: -1;
 }
 select:disabled { opacity: .5; cursor: not-allowed; }
+
+/* banner shown while an annotation tool is on */
+.tool-banner {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  background: var(--ann);
+  border: 0;
+  color: #fff;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: 13px system-ui, sans-serif;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tool-banner:hover { filter: brightness(1.08); border: 0; }
+.tool-banner[hidden], .capturing .tool-banner { display: none; }
+.tool-banner b { margin-right: 6px; }

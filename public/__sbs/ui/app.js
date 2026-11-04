@@ -157,6 +157,10 @@
         }
         break;
 
+      case 'escape':
+        emit('escape', role);
+        break;
+
       case 'clickMissed':
         toast('Couldn’t find ' + (msg.text ? '“' + msg.text.slice(0, 40) + '”' : 'that element') +
           ' on ' + (role === 'live' ? 'live' : 'staging'));
@@ -428,6 +432,10 @@
       };
     },
     shareUrl: function () { return shareUrl(); },
+    scrollBy: function (role, dx, dy) {
+      setLeader(role); // so the other side follows
+      send(role, { type: 'scrollBy', dx: dx, dy: dy });
+    },
   };
 
   init();

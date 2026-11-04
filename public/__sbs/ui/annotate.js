@@ -45,22 +45,42 @@
 
   // --- tools -------------------------------------------------------------
   var hints = {
-    scroll: 'Scroll to the spot, then pick <b>Callout</b> or <b>Box</b>. Click a number for options (like a close-up screenshot), drag it to move. Callouts stick to their spot on the page.',
+    scroll: 'Pick <b>Callout</b> or <b>Box</b>, then click or drag on the page. You can keep scrolling while a tool is on. Click a number for options (like a close-up screenshot), drag it to move. Callouts stick to their spot on the page.',
     pin: 'Click on the page where the problem is. <b>Esc</b> to go back to scrolling.',
     box: 'Drag on the page to outline an area. <b>Esc</b> to go back to scrolling.',
   };
+  // A banner over the pages while a drawing tool is on, so it's clear how to stop.
+  var banner = document.createElement('button');
+  banner.type = 'button';
+  banner.className = 'tool-banner';
+  banner.hidden = true;
+  stage.appendChild(banner);
+  banner.addEventListener('click', function () { setTool('scroll'); });
+
   function setTool(t) {
     tool = t;
-    stage.dataset.tool = t;
+    stage.dataset.annTool = t;
     panel.querySelectorAll('[data-tool]').forEach(function (b) { b.classList.toggle('active', b.dataset.tool === t); });
     $('toolHint').innerHTML = hints[t];
+    banner.hidden = t === 'scroll';
+    banner.innerHTML = t === 'box'
+      ? '<b>Box mode</b> drag on the page to draw · <u>Esc or click here to stop</u>'
+      : '<b>Callout mode</b> click on the page to add · <u>Esc or click here to stop</u>';
   }
   panel.querySelectorAll('[data-tool]').forEach(function (b) {
-    b.addEventListener('click', function () { setTool(b.dataset.tool); });
+    b.addEventListener('click', function () {
+      // Clicking the active tool again turns it off.
+      setTool(b.dataset.tool === tool && tool !== 'scroll' ? 'scroll' : b.dataset.tool);
+    });
   });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && tool !== 'scroll' && !dialog.open) setTool('scroll');
-  });
+
+  function escape() {
+    if (dialog.open) return;
+    closeMenus();
+    if (tool !== 'scroll') setTool('scroll');
+  }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') escape(); });
+  window.addEventListener('sbs:escape', escape); // Esc pressed inside one of the sites
 
   // --- coordinates: layer (screen) <-> page ------------------------------
   function toPage(role, lx, ly) {
@@ -203,6 +223,14 @@
   ROLES.forEach(function (role) {
     var layer = layers[role];
     var draft = null;
+    // The layer covers the page while a tool is on; pass the wheel through.
+    layer.addEventListener('wheel', function (e) {
+      if (tool === 'scroll') return;
+      e.preventDefault();
+      var k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? layer.clientHeight : 1;
+      var scale = window.SBS.pane(role).geom.scale;
+      window.SBS.scrollBy(role, e.deltaX * k / scale, e.deltaY * k / scale);
+    }, { passive: false });
     layer.addEventListener('pointerdown', function (e) {
       if (e.target !== layer || tool === 'scroll') return;
       e.preventDefault(); // keep focus in the new comment box
