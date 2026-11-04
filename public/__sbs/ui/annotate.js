@@ -45,7 +45,7 @@
 
   // --- tools -------------------------------------------------------------
   var hints = {
-    scroll: 'Scroll to the spot, then pick <b>Callout</b> or <b>Box</b>. Drag a number to move it. Callouts stick to their spot on the page.',
+    scroll: 'Scroll to the spot, then pick <b>Callout</b> or <b>Box</b>. Click a number for options (like a close-up screenshot), drag it to move. Callouts stick to their spot on the page.',
     pin: 'Click on the page where the problem is. <b>Esc</b> to go back to scrolling.',
     box: 'Drag on the page to outline an area. <b>Esc</b> to go back to scrolling.',
   };
@@ -106,9 +106,13 @@
   function addItem(role, kind, page, size) {
     var el = document.createElement('div');
     el.className = 'ann' + (kind === 'box' ? ' ann-box' : ' ann-pin');
-    el.innerHTML = '<span class="ann-num" title="Drag to move"></span>' +
+    el.innerHTML = '<span class="ann-num" title="Click for options, drag to move"></span>' +
       '<div class="ann-bubble empty"><textarea rows="1" placeholder="Comment…"></textarea>' +
-      '<button type="button" class="ann-del" title="Delete">×</button></div>';
+      '<button type="button" class="ann-more" title="More" aria-haspopup="menu">⋯</button>' +
+      '<div class="ann-menu" role="menu" hidden>' +
+      '<button type="button" role="menuitem" data-act="shot">Screenshot this</button>' +
+      '<button type="button" role="menuitem" data-act="delete" class="danger">Delete</button>' +
+      '</div></div>';
     layers[role].appendChild(el);
 
     var item = {
@@ -126,14 +130,40 @@
       ta.style.height = ta.scrollHeight + 'px';
       ta.parentNode.classList.toggle('empty', !ta.value.trim());
     });
-    el.querySelector('.ann-del').addEventListener('click', function () {
-      el.remove();
-      items.splice(items.indexOf(item), 1);
-      renumber();
+    var menu = el.querySelector('.ann-menu');
+    item.toggleMenu = function () {
+      var open = menu.hidden;
+      closeMenus();
+      menu.hidden = !open;
+    };
+    el.querySelector('.ann-more').addEventListener('click', function (e) {
+      e.stopPropagation();
+      item.toggleMenu();
+    });
+    menu.addEventListener('click', function (e) {
+      var act = e.target.dataset && e.target.dataset.act;
+      if (!act) return;
+      menu.hidden = true;
+      if (act === 'delete') {
+        el.remove();
+        items.splice(items.indexOf(item), 1);
+        renumber();
+      } else if (act === 'shot') {
+        screenshotItem(item);
+      }
     });
     makeDraggable(item);
     ta.focus();
   }
+
+  function closeMenus() {
+    document.querySelectorAll('.ann-menu').forEach(function (m) { m.hidden = true; });
+  }
+  document.addEventListener('pointerdown', function (e) {
+    if (!e.target.closest || !e.target.closest('.ann-menu, .ann-more, .ann-num')) closeMenus();
+  });
+  // Clicks inside a site happen in its iframe; the app only sees it lose focus.
+  window.addEventListener('blur', closeMenus);
 
   function renumber() {
     items.forEach(function (it, i) { it.el.querySelector('.ann-num').textContent = i + 1; });
@@ -147,7 +177,10 @@
       handle.setPointerCapture(e.pointerId);
       var startX = e.clientX, startY = e.clientY, ox = item.px, oy = item.py;
       var scale = window.SBS.pane(item.role).geom.scale;
+      var moved = false;
       function move(ev) {
+        if (!moved && Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < 4) return;
+        moved = true;
         item.px = ox + (ev.clientX - startX) / scale;
         item.py = oy + (ev.clientY - startY) / scale;
         render(item);
@@ -155,6 +188,7 @@
       function up() {
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', up);
+        if (!moved) item.toggleMenu(); // a click, not a drag: open the menu
       }
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', up);
@@ -203,6 +237,11 @@
   });
 
   // --- notes as text -------------------------------------------------------
+  function itemNote(it, i, currentPath) {
+    var where = LABEL[it.role] + (it.path !== currentPath ? ' ' + it.path : '');
+    return (i + 1) + '. [' + where + '] ' + (it.textarea.value.trim() || '(no comment)');
+  }
+
   function notesText() {
     var c = window.SBS.context();
     var lines = [
@@ -212,10 +251,7 @@
       '**Viewport:** ' + c.viewport + ' · **Layout:** ' + c.layout,
       '**Compare:** ' + c.share,
     ];
-    var notes = items.map(function (it, i) {
-      var where = LABEL[it.role] + (it.path !== c.path ? ' ' + it.path : '');
-      return (i + 1) + '. [' + where + '] ' + (it.textarea.value.trim() || '(no comment)');
-    });
+    var notes = items.map(function (it, i) { return itemNote(it, i, c.path); });
     if (notes.length) lines.push('', notes.join('\n'));
     if (summary.value.trim()) lines.push('', summary.value.trim());
     return lines.join('\n');
@@ -275,24 +311,36 @@
     return out;
   }
 
-  function compose(frame, crop, ratio) {
+  // Draw the header, one or more crops of the captured frame side by side,
+  // and an optional footer. crops: [{ x, y, w, h, label?, color? }] in frame px.
+  function compose(frame, crops, ratio, footerText) {
     var c = window.SBS.context();
     var s = ratio; // device pixels per CSS pixel in the captured frame
     var pad = 14 * s;
+    var gap = crops.length > 1 ? 12 * s : 0;
+    var labelH = crops.some(function (k) { return k.label; }) ? 26 * s : 0;
     var font = function (weight, size) { return weight + ' ' + Math.round(size * s) + 'px system-ui, -apple-system, Segoe UI, sans-serif'; };
-    var W = crop.w;
+
+    var cropsW = crops.reduce(function (sum, k) { return sum + k.w; }, 0) + gap * (crops.length - 1);
+    var W = Math.max(cropsW + (crops.length > 1 ? pad * 2 : 0), 560 * s);
+    var cropsH = Math.max.apply(null, crops.map(function (k) { return k.h; }));
 
     var measure = document.createElement('canvas').getContext('2d');
     measure.font = font(400, 13);
-    var summaryLines = summary.value.trim() ? wrap(measure, summary.value.trim(), W - pad * 2) : [];
+    var footerLines = footerText ? wrap(measure, footerText, W - pad * 2) : [];
     var header = 58 * s;
-    var footer = summaryLines.length ? pad * 2 + summaryLines.length * 18 * s : 0;
+    var bodyPad = crops.length > 1 ? pad : 0;
+    var body = labelH + cropsH + bodyPad * 2;
+    var footer = footerLines.length ? pad * 2 + footerLines.length * 18 * s : 0;
 
     var canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = header + crop.h + footer;
+    canvas.width = Math.round(W);
+    canvas.height = Math.round(header + body + footer);
     var ctx = canvas.getContext('2d');
+    ctx.fillStyle = crops.length > 1 ? '#e5e7eb' : '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // header
     ctx.fillStyle = '#111827';
     ctx.fillRect(0, 0, W, header);
     ctx.textBaseline = 'top';
@@ -309,27 +357,44 @@
     var meta = c.viewport + ' · ' + new Date().toLocaleString();
     ctx.fillText(meta, W - pad - ctx.measureText(meta).width, 10 * s);
 
-    ctx.drawImage(frame, crop.x, crop.y, crop.w, crop.h, 0, header, crop.w, crop.h);
+    // crops, centred
+    var x = (W - cropsW) / 2;
+    crops.forEach(function (k) {
+      var y = header + bodyPad;
+      if (k.label) {
+        ctx.font = font(700, 12);
+        ctx.fillStyle = k.color || '#111827';
+        ctx.fillText(k.label, x, y + 5 * s);
+        y += labelH;
+      }
+      ctx.drawImage(frame, k.x, k.y, k.w, k.h, x, y, k.w, k.h);
+      if (crops.length > 1) {
+        ctx.strokeStyle = 'rgba(0,0,0,.15)';
+        ctx.lineWidth = s;
+        ctx.strokeRect(x, y, k.w, k.h);
+      }
+      x += k.w + gap;
+    });
 
     if (footer) {
+      var fy = header + body;
       ctx.fillStyle = '#f9fafb';
-      ctx.fillRect(0, header + crop.h, W, footer);
+      ctx.fillRect(0, fy, W, footer);
       ctx.fillStyle = '#111827';
       ctx.font = font(400, 13);
-      summaryLines.forEach(function (l, i) { ctx.fillText(l, pad, header + crop.h + pad + i * 18 * s); });
+      footerLines.forEach(function (l, i) { ctx.fillText(l, pad, fy + pad + i * 18 * s); });
     }
     return canvas;
   }
 
-  $('captureBtn').addEventListener('click', function () {
+  // Capture the current tab as a canvas. Resolves { frame, ratio }.
+  function grabFrame() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-      toast('Screenshots need Chrome or Edge on desktop');
-      return;
+      return Promise.reject(new Error('unsupported'));
     }
-    var btn = this;
-    btn.disabled = true;
-    ensureStream()
+    return ensureStream()
       .then(function () {
+        closeMenus();
         document.body.classList.add('capturing');
         if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
         return frames(2).then(function () { return wait(200); });
@@ -346,35 +411,108 @@
         frame.width = vw;
         frame.height = vh;
         frame.getContext('2d').drawImage(video, 0, 0);
-        var r = stage.getBoundingClientRect();
-        var crop = {
-          x: Math.round(r.left * ratio), y: Math.round(r.top * ratio),
-          w: Math.round(r.width * ratio), h: Math.round(r.height * ratio),
-        };
-        return compose(frame, crop, ratio);
+        return { frame: frame, ratio: ratio };
       })
-      .then(function (canvas) {
-        return new Promise(function (res) { canvas.toBlob(res, 'image/png'); });
+      .finally(function () { document.body.classList.remove('capturing'); });
+  }
+
+  function toFrame(r, ratio) {
+    return {
+      x: Math.round(r.left * ratio), y: Math.round(r.top * ratio),
+      w: Math.round(r.width * ratio), h: Math.round(r.height * ratio),
+    };
+  }
+
+  function showShot(canvas, name) {
+    return new Promise(function (res) { canvas.toBlob(res, 'image/png'); }).then(function (blob) {
+      var c = window.SBS.context();
+      var slug = (c.path.replace(/[?#].*$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'home');
+      var stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      lastShot = { blob: blob, filename: 'sidebyside-' + slug + (name ? '-' + name : '') + '-' + stamp + '.png' };
+      if (shotImg.src) URL.revokeObjectURL(shotImg.src);
+      shotImg.src = URL.createObjectURL(blob);
+      dialog.showModal();
+    });
+  }
+
+  function captureError(err) {
+    if (err && err.message === 'unsupported') toast('Screenshots need Chrome or Edge on desktop');
+    else if (err && err.message === 'wrong-surface') toast('Please choose “this tab” when the browser asks what to share');
+    else if (err && err.name === 'NotAllowedError') toast('Screen capture was cancelled');
+    else { console.error(err); toast('Could not take a screenshot'); }
+  }
+
+  // Whole comparison
+  $('captureBtn').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    grabFrame()
+      .then(function (g) {
+        var canvas = compose(g.frame, [toFrame(stage.getBoundingClientRect(), g.ratio)], g.ratio, summary.value.trim());
+        return showShot(canvas);
       })
-      .then(function (blob) {
-        var c = window.SBS.context();
-        var slug = (c.path.replace(/[?#].*$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'home');
-        var stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-        lastShot = { blob: blob, filename: 'sidebyside-' + slug + '-' + stamp + '.png' };
-        if (shotImg.src) URL.revokeObjectURL(shotImg.src);
-        shotImg.src = URL.createObjectURL(blob);
-        dialog.showModal();
-      })
-      .catch(function (err) {
-        if (err && err.message === 'wrong-surface') toast('Please choose “this tab” when the browser asks what to share');
-        else if (err && err.name === 'NotAllowedError') toast('Screen capture was cancelled');
-        else { console.error(err); toast('Could not take a screenshot'); }
-      })
-      .then(function () {
-        document.body.classList.remove('capturing');
-        btn.disabled = false;
-      });
+      .catch(captureError)
+      .then(function () { btn.disabled = false; });
   });
+
+  // Close-up of one annotation, with the same spot on the other site beside it.
+  function screenshotItem(item) {
+    var host = layers[item.role].parentNode;
+    var hostRect = host.getBoundingClientRect();
+    var parts = [item.el, item.el.querySelector('.ann-num'), item.el.querySelector('.ann-bubble')];
+    var r = parts.reduce(function (u, el) {
+      var b = el.getBoundingClientRect();
+      if (!b.width && !b.height) return u;
+      return u ? {
+        left: Math.min(u.left, b.left), top: Math.min(u.top, b.top),
+        right: Math.max(u.right, b.right), bottom: Math.max(u.bottom, b.bottom),
+      } : { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+    }, null);
+    var PAD = 90;
+    // Area around the annotation, relative to its pane, kept inside the pane.
+    var rel = {
+      left: Math.max(0, r.left - PAD - hostRect.left),
+      top: Math.max(0, r.top - PAD - hostRect.top),
+      right: Math.min(hostRect.width, r.right + PAD - hostRect.left),
+      bottom: Math.min(hostRect.height, r.bottom + PAD - hostRect.top),
+    };
+
+    // The other site, if it's on screen next to this one (not overlay / single view).
+    var otherRole = item.role === 'live' ? 'staging' : 'live';
+    var otherHost = layers[otherRole].parentNode;
+    var otherRect = otherHost.getBoundingClientRect();
+    var otherVisible = !stage.classList.contains('overlay') && !stage.classList.contains('solo') &&
+      otherRect.width > 0 && getComputedStyle(otherHost.closest('.pane')).visibility === 'visible';
+    if (otherVisible) {
+      rel.right = Math.min(rel.right, otherRect.width);
+      rel.bottom = Math.min(rel.bottom, otherRect.height);
+    }
+    var at = function (base) {
+      return { left: base.left + rel.left, top: base.top + rel.top, width: rel.right - rel.left, height: rel.bottom - rel.top };
+    };
+
+    var index = items.indexOf(item);
+    grabFrame()
+      .then(function (g) {
+        var mine = toFrame(at(hostRect), g.ratio);
+        var crops;
+        if (otherVisible) {
+          var theirs = toFrame(at(otherRect), g.ratio);
+          var live = item.role === 'live' ? mine : theirs;
+          var staging = item.role === 'live' ? theirs : mine;
+          live.label = 'LIVE'; live.color = '#15803d';
+          staging.label = 'STAGING'; staging.color = '#b45309';
+          crops = [live, staging];
+        } else {
+          mine.label = LABEL[item.role].toUpperCase();
+          mine.color = item.role === 'live' ? '#15803d' : '#b45309';
+          crops = [mine];
+        }
+        var canvas = compose(g.frame, crops, g.ratio, itemNote(item, index, window.SBS.context().path));
+        return showShot(canvas, 'note-' + (index + 1));
+      })
+      .catch(captureError);
+  }
 
   // --- preview dialog --------------------------------------------------------
   dialog.querySelector('[data-close]').addEventListener('click', function () { dialog.close(); });

@@ -303,7 +303,7 @@ body.login { align-items: center; justify-content: center; }
   color: inherit;
   font: 13px/1.35 system-ui, sans-serif;
 }
-.ann-del {
+.ann-more {
   flex: none;
   align-self: flex-start;
   border: 0;
@@ -313,10 +313,39 @@ body.login { align-items: center; justify-content: center; }
   font-size: 15px;
   line-height: 1;
 }
-.ann-del:hover { color: var(--ann); }
+.ann-more:hover { color: var(--ann); }
+.ann-more { font-size: 17px; letter-spacing: 1px; }
+.ann-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 2;
+  min-width: 160px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.ann-menu[hidden] { display: none; }
+.ann-menu button {
+  border: 0;
+  background: none;
+  color: #111;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font: 13px system-ui, sans-serif;
+}
+.ann-menu button:hover { background: #f3f4f6; }
+.ann-menu button.danger { color: #be123c; }
+.ann.flip-y .ann-menu { top: auto; bottom: calc(100% + 4px); }
 
 /* while capturing: hide controls and empty bubbles */
-.capturing .ann-del { visibility: hidden; }
+.capturing .ann-more { visibility: hidden; }
+.capturing .ann-menu { display: none !important; }
 .capturing .ann-bubble.empty,
 .capturing .toast { display: none !important; }
 .capturing .pane.leader .pane-bar { box-shadow: none; }
