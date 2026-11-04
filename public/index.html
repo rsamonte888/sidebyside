@@ -71,10 +71,12 @@
       </span>
 
       <span class="spacer"></span>
+      <button id="annotateBtn" type="button" title="Add callouts and take a screenshot for a ticket">Annotate</button>
       <button id="share" type="button" title="Copy a link to this comparison">Copy link</button>
     </div>
   </header>
 
+  <div class="workspace">
   <main id="stage" class="stage split">
     <section class="pane" data-role="live">
       <div class="pane-bar">
@@ -105,9 +107,45 @@
         <li>Use <b>Overlay → Difference</b> to spot pixel changes.</li>
       </ul>
     </div>
+    <div id="annotations" class="annotations" data-tool="scroll" aria-label="Annotations"></div>
   </main>
+
+  <aside id="notesPanel" class="notes-panel" hidden>
+    <div class="np-head">
+      <b>Annotate</b>
+      <button id="annotateClose" type="button" title="Close">×</button>
+    </div>
+    <div class="np-tools" role="group" aria-label="Annotation tool">
+      <button type="button" data-tool="scroll" class="active" title="Scroll and click the pages (Esc)">Scroll</button>
+      <button type="button" data-tool="pin" title="Click on the page to add a numbered comment">Callout</button>
+      <button type="button" data-tool="box" title="Drag on the page to outline an area">Box</button>
+    </div>
+    <p class="np-hint" id="toolHint">Scroll to the spot, then pick <b>Callout</b> or <b>Box</b>. Drag a number to move it. Callouts stay put on screen, so take the screenshot before scrolling again.</p>
+    <label class="np-label">Summary
+      <textarea id="summary" rows="5" placeholder="What's wrong? Expected vs. actual…"></textarea>
+    </label>
+    <button id="captureBtn" type="button" class="primary">Take screenshot</button>
+    <button id="copyNotes" type="button">Copy notes as text</button>
+    <button id="clearAnn" type="button">Clear annotations</button>
+    <p class="np-foot">Screenshots use the browser's tab capture. When asked, allow sharing <b>this tab</b>. Works best in Chrome or Edge.</p>
+  </aside>
+  </div>
+
+  <dialog id="shotDialog" class="shot-dialog">
+    <div class="shot-head">
+      <b>Screenshot</b>
+      <button type="button" data-close title="Close">×</button>
+    </div>
+    <div class="shot-body"><img id="shotImg" alt="Screenshot preview"></div>
+    <div class="shot-actions">
+      <button id="shotCopy" type="button" class="primary">Copy image</button>
+      <button id="shotDownload" type="button">Download PNG</button>
+      <button id="shotCopyNotes" type="button">Copy notes as text</button>
+    </div>
+  </dialog>
 
   <div id="toast" class="toast" role="status" hidden></div>
   <script src="/__sbs/ui/app.js"></script>
+  <script src="/__sbs/ui/annotate.js"></script>
 </body>
 </html>

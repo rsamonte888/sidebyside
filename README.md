@@ -7,6 +7,7 @@ A web app for QA to compare a **production** page with a new **Amplify** build o
 - **Viewport presets.** Fit, 1920, 1440, 1280, 1024, 768, 390 and 360. Wide viewports are scaled down to fit the pane.
 - **Layouts.** Side by side, stacked, or **overlay** with a staging-opacity slider and a **Difference** mode. In Difference mode identical pixels turn black, so changes stand out.
 - **Shareable links.** *Copy link* captures both sites, the path, the viewport and the layout. Paste it into a ticket.
+- **Annotate & screenshot.** Drop numbered callouts or draw boxes over the pages, add a summary, then take a screenshot (with a header naming the page, URLs, viewport and date) to copy or download for the ticket. **Copy notes as text** gives the matching ticket text.
 - **Team password.** A single shared password set with `APP_PASSWORD`.
 
 Nothing has to change on your website.

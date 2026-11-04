@@ -274,5 +274,22 @@
       .catch(function () { toast('Could not reach the Side by Side server'); });
   }
 
+  // Used by annotate.js to label screenshots and notes.
+  window.SBS = {
+    toast: toast,
+    context: function () {
+      syncQuery();
+      var opt = function (sel) { return sel.options[sel.selectedIndex].text; };
+      return {
+        live: panes.live.origin ? panes.live.origin + panes.live.path : '',
+        staging: panes.staging.origin ? panes.staging.origin + panes.staging.path : '',
+        path: panes.live.path || '/',
+        viewport: opt(els.viewport),
+        layout: opt(els.layout),
+        share: location.href,
+      };
+    },
+  };
+
   init();
 })();
