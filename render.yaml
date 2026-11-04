@@ -3,7 +3,7 @@ services:
   - type: web
     name: sidebyside
     runtime: node
-    plan: starter # the free plan sleeps after 15 min idle (≈1 min cold start)
+    plan: free # sleeps after 15 min idle; first visit after that takes ~1 min to wake
     buildCommand: npm install --omit=dev
     startCommand: npm start
     healthCheckPath: /__sbs/health

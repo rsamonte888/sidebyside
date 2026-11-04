@@ -15,7 +15,7 @@ Nothing has to change on your website.
 
 It's a single Node server with no dependencies and no build step. Pick one option.
 
-### Option A: Render (simplest, about 5 minutes)
+### Option A: Render (free, about 5 minutes)
 
 1. In Render: **New → Blueprint**, then choose this GitHub repo. It reads `render.yaml`.
 2. Enter `APP_PASSWORD` and `ALLOWED_HOSTS` when prompted (see below).
