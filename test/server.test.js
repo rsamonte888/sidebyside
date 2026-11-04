@@ -4,8 +4,9 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import {
   rewriteOrigins, rewriteHtmlPaths, rewriteCssPaths, injectAgent, hostAllowed,
-  encodeSite, decodeSite, parseProxyPath, createHandler,
-} from '../server.js';
+  encodeSite, decodeSite, parseProxyPath,
+} from '../lib/core.js';
+import { createServer } from '../server.js';
 
 test('site encoding round-trips', () => {
   assert.equal(encodeSite('https://www.site.com'), 'www.site.com');
@@ -56,6 +57,7 @@ test('injectAgent adds the agent after <head>', () => {
 
 test('hostAllowed supports wildcards', () => {
   const rules = ['*.amplifyapp.com', 'www.site.com'];
+  assert.equal(decodeSite('evil.com', rules), null);
   assert.ok(hostAllowed('main.d123.amplifyapp.com', rules));
   assert.ok(hostAllowed('www.site.com', rules));
   assert.ok(!hostAllowed('evil.com', rules));
@@ -79,7 +81,7 @@ test('proxy end to end: headers, rewriting, cookies, redirects, referer fallback
   await new Promise((r) => upstream.once('listening', r));
   const site = `http:127.0.0.1:${upstream.address().port}`;
 
-  const app = http.createServer(createHandler()).listen(0, '127.0.0.1');
+  const app = createServer().listen(0, '127.0.0.1');
   await new Promise((r) => app.once('listening', r));
   const base = `http://127.0.0.1:${app.address().port}`;
   const P = `/x/${site}`;
@@ -110,6 +112,27 @@ test('proxy end to end: headers, rewriting, cookies, redirects, referer fallback
     assert.equal(nav.headers.get('location'), `${P}/about`);
   } finally {
     upstream.close();
+    app.close();
+  }
+});
+
+test('login flow and static UI', async () => {
+  process.env.APP_PASSWORD = 'pw';
+  const app = createServer().listen(0, '127.0.0.1');
+  await new Promise((r) => app.once('listening', r));
+  const base = `http://127.0.0.1:${app.address().port}`;
+  try {
+    assert.equal((await fetch(`${base}/`)).status, 200, 'UI is static');
+    assert.equal((await fetch(`${base}/__sbs/me`)).status, 401);
+    assert.equal((await fetch(`${base}/x/www.site.com/`)).status, 401, 'proxy needs login');
+    const bad = await fetch(`${base}/__sbs/login`, { method: 'POST', body: 'password=no', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    assert.equal(bad.status, 401);
+    const ok = await fetch(`${base}/__sbs/login`, { method: 'POST', body: 'password=pw', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    assert.equal(ok.status, 303);
+    const cookie = ok.headers.get('set-cookie').split(';')[0];
+    assert.equal((await fetch(`${base}/__sbs/me`, { headers: { cookie } })).status, 200);
+  } finally {
+    delete process.env.APP_PASSWORD;
     app.close();
   }
 });

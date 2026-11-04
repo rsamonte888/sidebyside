@@ -9,6 +9,6 @@
     "test": "node --test"
   },
   "engines": {
-    "node": ">=18.17"
+    "node": ">=20"
   }
 }

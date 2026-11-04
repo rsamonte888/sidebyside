@@ -11,30 +11,22 @@ A web app for QA to compare a **production** page with a new **Amplify** build o
 
 Nothing has to change on your website.
 
-## Deploy
+## Deploy on Netlify (free)
 
-It's a single Node server with no dependencies and no build step. Pick one option.
+1. In Netlify: **Add new project → Import an existing project → GitHub**, then pick this repo and branch.
+2. Leave the build settings alone. `netlify.toml` already sets them (no build command; publish directory `public`).
+3. Under **Environment variables**, add `APP_PASSWORD` and `ALLOWED_HOSTS` (see below).
+4. Click **Deploy**. If you add or change environment variables later, run **Deploys → Trigger deploy** so they take effect.
 
-### Option A: Render (free, about 5 minutes)
-
-1. In Render: **New → Blueprint**, then choose this GitHub repo. It reads `render.yaml`.
-2. Enter `APP_PASSWORD` and `ALLOWED_HOSTS` when prompted (see below).
-3. Optionally add a custom domain such as `sidebyside.yourco.com` under **Settings → Custom Domains**.
-
-### Option B: AWS (App Runner or ECS) or any container host
-
-Use the `Dockerfile`. The container listens on port `8080`. With App Runner: push the image to ECR, create a service from it, set the environment variables, and set the health check path to `/__sbs/health`. The same image runs on Google Cloud Run, Fly.io, Railway, or Kubernetes.
-
-> **Why not Amplify Hosting?** Amplify Hosting is built for static sites and framework SSR. This app is a long-running reverse proxy that streams other websites, so it belongs on a container or web-service host.
+The UI is served as static files and everything else runs in one Netlify Function (`netlify/functions/proxy.mjs`). Every file a proxied page loads counts as a function call, and the traffic counts as bandwidth. A QA team's normal use should fit in the free plan, but check **Usage** in Netlify after the first week.
 
 ### Environment variables
 
-| Variable | Required when hosted | Description |
+| Variable | Required | Description |
 |----------|----------|-------------|
 | `APP_PASSWORD` | **yes** | Shared password for the team. Without it, anyone with the URL can use the proxy. |
 | `ALLOWED_HOSTS` | **yes** | Comma-separated hosts the proxy may load. Supports wildcards: `www.yoursite.com,yoursite.com,*.amplifyapp.com` |
-| `PORT` | set by host | Port to listen on (default `4000` locally) |
-| `PUBLIC_URL` | no | Public base URL, e.g. `https://sidebyside.yourco.com`. Only needed if your host doesn't send `X-Forwarded-Host`. |
+| `PUBLIC_URL` | no | Public base URL, if you see wrong links after adding a custom domain. |
 
 ## Using it
 
@@ -76,7 +68,7 @@ On the way through, the proxy:
 
 ## Run locally
 
-Requires Node 18.17 or newer.
+Requires Node 20 or newer.
 
 ```bash
 npm start
@@ -90,7 +82,8 @@ npm test
 
 Files:
 
-- `server.js`: the HTTP server, proxy, rewriting and login
-- `public/index.html`, `public/app.js`, `public/styles.css`: the comparison UI
-- `public/agent.js`: the script injected into each proxied page
-- `Dockerfile`, `render.yaml`: deployment
+- `lib/core.js`: proxy, rewriting and login (shared by Netlify and local)
+- `netlify/functions/proxy.mjs`: the Netlify Function entry point
+- `server.js`: local dev server that mimics Netlify
+- `public/index.html`, `public/__sbs/ui/`: the comparison UI
+- `public/__sbs/agent.js`: the script injected into each proxied page

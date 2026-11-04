@@ -264,7 +264,14 @@
     setSelect(els.layout, q.get('layout') || store.get('layout'));
     setSelect(els.scrollMode, q.get('mode') || store.get('mode'));
     applyLayout();
-    if (q.get('live') && q.get('staging')) compare();
+
+    // The page itself is static; the proxy checks the team password.
+    fetch('/__sbs/me', { credentials: 'same-origin' })
+      .then(function (r) {
+        if (r.status === 401) { location.href = '/__sbs/login'; return; }
+        if (q.get('live') && q.get('staging')) compare();
+      })
+      .catch(function () { toast('Could not reach the Side by Side server'); });
   }
 
   init();
