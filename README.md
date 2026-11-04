@@ -8,7 +8,7 @@ A web app for QA to compare a **production** page with a new **Amplify** build o
 - **Both or one.** Switch between **Both**, **Live only** and **Staging only** (or use the ⤢ button on a pane) to see one site full width. The hidden site keeps syncing, so switching back lines up straight away.
 - **Viewport presets.** Fit, 1920, 1440, 1280, 1024, 768, 390 and 360. Wide viewports are scaled down to fit the pane.
 - **Layouts.** Side by side, stacked, or **overlay** with a staging-opacity slider and a **Difference** mode. In Difference mode identical pixels turn black, so changes stand out.
-- **Shareable links.** *Copy link* captures both sites, the path, the viewport and the layout. Paste it into a ticket.
+- **Shareable links.** *Copy link* captures both sites, the page, the viewport and the layout. If there are annotations, the link also carries them, the summary and both scroll positions (compressed into the link, nothing stored on a server), so it opens that exact screen. Someone who isn't signed in is sent back to the link after signing in.
 - **Annotate & screenshot.** Drop numbered callouts or draw boxes over the pages, add a summary, then take a screenshot (with a header naming the page, URLs, viewport and date) to copy or download for the ticket. **Copy notes as text** gives the matching ticket text.
 - **Team password.** A single shared password set with `APP_PASSWORD`.
 

@@ -129,6 +129,15 @@ test('login flow and static UI', async () => {
     assert.equal(bad.status, 401);
     const ok = await fetch(`${base}/__sbs/login`, { method: 'POST', body: 'password=pw', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
     assert.equal(ok.status, 303);
+    assert.equal(ok.headers.get('location'), '/');
+    const post = (body) => fetch(`${base}/__sbs/login`, { method: 'POST', body, redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    const back = await post('password=pw&next=' + encodeURIComponent('/?live=a.com&ann=z123'));
+    assert.equal(back.headers.get('location'), '/?live=a.com&ann=z123', 'returns to the shared link');
+    for (const evil of ['//evil.com', 'https://evil.com', '/\\evil.com']) {
+      assert.equal((await post('password=pw&next=' + encodeURIComponent(evil))).headers.get('location'), '/', evil);
+    }
+    const form = await (await fetch(`${base}/__sbs/login?next=${encodeURIComponent('/?a="><script>')}`)).text();
+    assert.ok(!form.includes('"><script>'), 'next is escaped in the form');
     const cookie = ok.headers.get('set-cookie').split(';')[0];
     assert.equal((await fetch(`${base}/__sbs/me`, { headers: { cookie } })).status, 200);
   } finally {

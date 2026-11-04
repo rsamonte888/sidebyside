@@ -182,6 +182,7 @@
         if (panes[role].path !== msg.path) panes[role].scroll = { x: 0, y: 0 };
         panes[role].path = msg.path;
         emit('nav', role);
+        tryRestore(role);
         // The site can change on redirect, e.g. example.com -> www.example.com.
         if (msg.site) panes[role].origin = decodeSite(msg.site);
         updateLabel(role);
@@ -296,12 +297,73 @@
     history.replaceState(null, '', qs ? '?' + qs : location.pathname);
   }
 
-  els.share.addEventListener('click', function () {
+  // --- annotations in the link ------------------------------------------------
+  // The annotations, summary and both scroll positions are packed into an
+  // `ann` parameter (deflate + base64url), so the link opens the same screen.
+  function b64url(bytes) {
+    var bin = '';
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function unb64url(s) {
+    var bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function pipe(bytes, stream) {
+    return new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer()
+      .then(function (b) { return new Uint8Array(b); });
+  }
+  function encodeState(obj) {
+    var bytes = new TextEncoder().encode(JSON.stringify(obj));
+    if (!window.CompressionStream) return Promise.resolve('j' + b64url(bytes));
+    return pipe(bytes, new CompressionStream('deflate-raw')).then(function (z) { return 'z' + b64url(z); });
+  }
+  function decodeState(s) {
+    var bytes = unb64url(s.slice(1));
+    var p = s[0] === 'z' ? pipe(bytes, new DecompressionStream('deflate-raw')) : Promise.resolve(bytes);
+    return p.then(function (b) { return JSON.parse(new TextDecoder().decode(b)); });
+  }
+
+  function shareUrl() {
     syncQuery();
-    var url = location.href;
-    (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
-      .then(function () { toast('Link copied'); })
-      .catch(function () { window.prompt('Copy this link:', url); });
+    var base = location.href;
+    var ann = window.SBS.annotations && window.SBS.annotations.save();
+    if (!ann) return Promise.resolve(base);
+    ann.sc = {};
+    ROLES.forEach(function (r) { ann.sc[r] = [Math.round(panes[r].scroll.x), Math.round(panes[r].scroll.y)]; });
+    return encodeState(ann).then(function (enc) {
+      return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'ann=' + enc;
+    });
+  }
+
+  // Restoring scroll from a link: pages may still be loading content, so retry.
+  var restore = null; // { live: [x, y], staging: [x, y] }
+  function tryRestore(role) {
+    if (!restore || !restore[role] || !panes[role].origin) return;
+    var target = restore[role];
+    var attempts = 0;
+    (function attempt() {
+      if (!restore || restore[role] !== target) return;
+      var s = panes[role].scroll;
+      if (Math.abs(s.y - target[1]) < 2 && Math.abs(s.x - target[0]) < 2) { delete restore[role]; return; }
+      if (attempts++ > 8) { delete restore[role]; return; }
+      send(role, { type: 'scrollTo', mode: 'px', x: target[0], y: target[1] });
+      setTimeout(attempt, 400 + attempts * 200);
+    })();
+  }
+
+  els.share.addEventListener('click', function () {
+    shareUrl().then(function (url) {
+      return (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
+        .then(function () {
+          var n = window.SBS.annotations ? window.SBS.annotations.count() : 0;
+          toast(n ? 'Link copied with ' + n + ' annotation' + (n > 1 ? 's' : '') : 'Link copied');
+          if (url.length > 8000) setTimeout(function () { toast('Heads up: this link is very long, some apps may cut it off'); }, 2400);
+        })
+        .catch(function () { window.prompt('Copy this link:', url); });
+    });
   });
 
   // --- wiring ------------------------------------------------------------
@@ -329,8 +391,19 @@
     // The page itself is static; the proxy checks the team password.
     fetch('/__sbs/me', { credentials: 'same-origin' })
       .then(function (r) {
-        if (r.status === 401) { location.href = '/__sbs/login'; return; }
+        if (r.status === 401) {
+          // Come back to this exact link (with its annotations) after signing in.
+          location.href = '/__sbs/login?next=' + encodeURIComponent(location.pathname + location.search);
+          return;
+        }
         if (q.get('live') && q.get('staging')) compare();
+        if (q.get('ann')) {
+          decodeState(q.get('ann')).then(function (data) {
+            restore = data.sc || null;
+            if (window.SBS.annotations) window.SBS.annotations.load(data);
+            ROLES.forEach(tryRestore);
+          }).catch(function () { toast('Couldn’t read the annotations in this link'); });
+        }
       })
       .catch(function () { toast('Could not reach the Side by Side server'); });
   }
@@ -354,6 +427,7 @@
         share: location.href,
       };
     },
+    shareUrl: function () { return shareUrl(); },
   };
 
   init();

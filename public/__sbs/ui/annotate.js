@@ -103,7 +103,8 @@
   window.addEventListener('sbs:layout', function () { renderAll(); });
 
   // --- creating annotations ---------------------------------------------
-  function addItem(role, kind, page, size) {
+  function addItem(role, kind, page, size, opts) {
+    opts = opts || {};
     var el = document.createElement('div');
     el.className = 'ann' + (kind === 'box' ? ' ann-box' : ' ann-pin');
     el.innerHTML = '<span class="ann-num" title="Click for options, drag to move"></span>' +
@@ -116,7 +117,7 @@
     layers[role].appendChild(el);
 
     var item = {
-      el: el, kind: kind, role: role, path: window.SBS.pane(role).path,
+      el: el, kind: kind, role: role, path: opts.path || window.SBS.pane(role).path,
       px: page.x, py: page.y, pw: size ? size.w : 0, ph: size ? size.h : 0,
       textarea: el.querySelector('textarea'),
     };
@@ -153,7 +154,11 @@
       }
     });
     makeDraggable(item);
-    ta.focus();
+    if (opts.text) {
+      ta.value = opts.text;
+      ta.dispatchEvent(new Event('input'));
+    }
+    if (!opts.silent) ta.focus();
   }
 
   function closeMenus() {
@@ -230,6 +235,34 @@
     });
   });
 
+  // --- save / load (used by share links) ------------------------------------
+  window.SBS.annotations = {
+    count: function () { return items.length; },
+    save: function () {
+      if (!items.length && !summary.value.trim()) return null;
+      return {
+        v: 1,
+        items: items.map(function (it) {
+          return {
+            r: it.role === 'live' ? 'l' : 's', k: it.kind === 'box' ? 'b' : 'p', p: it.path,
+            x: Math.round(it.px), y: Math.round(it.py), w: Math.round(it.pw), h: Math.round(it.ph),
+            t: it.textarea.value,
+          };
+        }),
+        sum: summary.value,
+      };
+    },
+    load: function (data) {
+      if (!data || data.v !== 1) return;
+      (data.items || []).forEach(function (d) {
+        addItem(d.r === 'l' ? 'live' : 'staging', d.k === 'b' ? 'box' : 'pin', { x: d.x, y: d.y },
+          d.k === 'b' ? { w: d.w, h: d.h } : null, { path: d.p, text: d.t, silent: true });
+      });
+      if (data.sum) summary.value = data.sum;
+      setOpen(true);
+    },
+  };
+
   $('clearAnn').addEventListener('click', function () {
     if (items.length && !confirm('Remove all ' + items.length + ' annotations?')) return;
     items.forEach(function (it) { it.el.remove(); });
@@ -242,14 +275,14 @@
     return (i + 1) + '. [' + where + '] ' + (it.textarea.value.trim() || '(no comment)');
   }
 
-  function notesText() {
+  function notesText(link) {
     var c = window.SBS.context();
     var lines = [
       '**Page:** ' + c.path,
       '**Live:** ' + c.live,
       '**Staging:** ' + c.staging,
       '**Viewport:** ' + c.viewport + ' · **Layout:** ' + c.layout,
-      '**Compare:** ' + c.share,
+      '**Compare:** ' + (link || c.share),
     ];
     var notes = items.map(function (it, i) { return itemNote(it, i, c.path); });
     if (notes.length) lines.push('', notes.join('\n'));
@@ -262,8 +295,11 @@
       function () { toast('Notes copied'); },
       function () { window.prompt('Copy these notes:', text); });
   }
-  $('copyNotes').addEventListener('click', function () { copyText(notesText()); });
-  $('shotCopyNotes').addEventListener('click', function () { copyText(notesText()); });
+  function copyNotes() {
+    window.SBS.shareUrl().then(function (url) { copyText(notesText(url)); });
+  }
+  $('copyNotes').addEventListener('click', copyNotes);
+  $('shotCopyNotes').addEventListener('click', copyNotes);
 
   // --- screenshot ----------------------------------------------------------
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
