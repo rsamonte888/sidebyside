@@ -5,7 +5,6 @@
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
-  var layer = $('annotations');
   var stage = $('stage');
   var panel = $('notesPanel');
   var openBtn = $('annotateBtn');
@@ -13,12 +12,27 @@
   var dialog = $('shotDialog');
   var shotImg = $('shotImg');
   var toast = function (m) { window.SBS && window.SBS.toast(m); };
+  var ROLES = ['live', 'staging'];
+  var LABEL = { live: 'Live', staging: 'Staging' };
 
   var tool = 'scroll';
-  var items = []; // { el, textarea }
+  // Each item is anchored to a spot on a page: { role, path, px, py, pw, ph }
+  // in the page's own CSS pixels, so it moves with the page when it scrolls.
+  var items = [];
   var stream = null;
   var video = null;
   var lastShot = null; // { blob, filename }
+
+  // One annotation layer per pane, clipped to that pane.
+  var layers = {};
+  ROLES.forEach(function (role) {
+    var host = document.querySelector('.pane[data-role="' + role + '"] .viewport-host');
+    var layer = document.createElement('div');
+    layer.className = 'ann-layer';
+    layer.dataset.role = role;
+    host.appendChild(layer);
+    layers[role] = layer;
+  });
 
   // --- open / close ------------------------------------------------------
   function setOpen(open) {
@@ -31,13 +45,13 @@
 
   // --- tools -------------------------------------------------------------
   var hints = {
-    scroll: 'Scroll to the spot, then pick <b>Callout</b> or <b>Box</b>. Drag a number to move it. Callouts stay put on screen, so take the screenshot before scrolling again.',
+    scroll: 'Scroll to the spot, then pick <b>Callout</b> or <b>Box</b>. Drag a number to move it. Callouts stick to their spot on the page.',
     pin: 'Click on the page where the problem is. <b>Esc</b> to go back to scrolling.',
     box: 'Drag on the page to outline an area. <b>Esc</b> to go back to scrolling.',
   };
   function setTool(t) {
     tool = t;
-    layer.dataset.tool = t;
+    stage.dataset.tool = t;
     panel.querySelectorAll('[data-tool]').forEach(function (b) { b.classList.toggle('active', b.dataset.tool === t); });
     $('toolHint').innerHTML = hints[t];
   }
@@ -48,33 +62,63 @@
     if (e.key === 'Escape' && tool !== 'scroll' && !dialog.open) setTool('scroll');
   });
 
-  // --- creating annotations ---------------------------------------------
-  function localPoint(e) {
+  // --- coordinates: layer (screen) <-> page ------------------------------
+  function toPage(role, lx, ly) {
+    var p = window.SBS.pane(role);
+    return { x: (lx - p.geom.left) / p.geom.scale + p.scroll.x, y: ly / p.geom.scale + p.scroll.y };
+  }
+  function toLayer(role, px, py) {
+    var p = window.SBS.pane(role);
+    return { x: p.geom.left + (px - p.scroll.x) * p.geom.scale, y: (py - p.scroll.y) * p.geom.scale };
+  }
+  function localPoint(layer, e) {
     var r = layer.getBoundingClientRect();
-    return { x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top), w: r.width, h: r.height };
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  function place(el, x, y, w, h) {
-    el.style.left = x + 'px';
-    el.style.top = y + 'px';
-    var lw = layer.clientWidth, lh = layer.clientHeight;
-    el.classList.toggle('flip-x', x + 260 > lw);
-    el.classList.toggle('flip-y', y + (h || 0) + 120 > lh);
+  function render(it) {
+    var pane = window.SBS.pane(it.role);
+    var onPage = pane.path === it.path;
+    it.el.style.display = onPage ? '' : 'none';
+    if (!onPage) return;
+    var pos = toLayer(it.role, it.px, it.py);
+    var scale = pane.geom.scale;
+    it.el.style.left = pos.x + 'px';
+    it.el.style.top = pos.y + 'px';
+    var h = 0;
+    if (it.kind === 'box') {
+      it.el.style.width = it.pw * scale + 'px';
+      it.el.style.height = (h = it.ph * scale) + 'px';
+    }
+    var layer = layers[it.role];
+    it.el.classList.toggle('flip-x', pos.x + 260 > layer.clientWidth);
+    it.el.classList.toggle('flip-y', pos.y + h + 120 > layer.clientHeight);
   }
+  function renderAll(role) {
+    items.forEach(function (it) { if (!role || it.role === role) render(it); });
+  }
+  ['sbs:scroll', 'sbs:nav'].forEach(function (ev) {
+    window.addEventListener(ev, function (e) { renderAll(e.detail.role); });
+  });
+  window.addEventListener('sbs:layout', function () { renderAll(); });
 
-  function addItem(kind, x, y, w, h) {
+  // --- creating annotations ---------------------------------------------
+  function addItem(role, kind, page, size) {
     var el = document.createElement('div');
     el.className = 'ann' + (kind === 'box' ? ' ann-box' : ' ann-pin');
-    if (kind === 'box') { el.style.width = w + 'px'; el.style.height = h + 'px'; }
     el.innerHTML = '<span class="ann-num" title="Drag to move"></span>' +
       '<div class="ann-bubble empty"><textarea rows="1" placeholder="Comment…"></textarea>' +
       '<button type="button" class="ann-del" title="Delete">×</button></div>';
-    layer.appendChild(el);
-    place(el, x, y, w, h);
+    layers[role].appendChild(el);
 
-    var item = { el: el, kind: kind, textarea: el.querySelector('textarea') };
+    var item = {
+      el: el, kind: kind, role: role, path: window.SBS.pane(role).path,
+      px: page.x, py: page.y, pw: size ? size.w : 0, ph: size ? size.h : 0,
+      textarea: el.querySelector('textarea'),
+    };
     items.push(item);
     renumber();
+    render(item);
 
     var ta = item.textarea;
     ta.addEventListener('input', function () {
@@ -87,7 +131,7 @@
       items.splice(items.indexOf(item), 1);
       renumber();
     });
-    makeDraggable(el, el.querySelector('.ann-num'), w, h);
+    makeDraggable(item);
     ta.focus();
   }
 
@@ -95,14 +139,19 @@
     items.forEach(function (it, i) { it.el.querySelector('.ann-num').textContent = i + 1; });
   }
 
-  function makeDraggable(el, handle, w, h) {
+  function makeDraggable(item) {
+    var handle = item.el.querySelector('.ann-num');
     handle.addEventListener('pointerdown', function (e) {
       e.preventDefault();
       e.stopPropagation();
       handle.setPointerCapture(e.pointerId);
-      var startX = e.clientX, startY = e.clientY;
-      var ox = parseFloat(el.style.left), oy = parseFloat(el.style.top);
-      function move(ev) { place(el, ox + ev.clientX - startX, oy + ev.clientY - startY, w, h); }
+      var startX = e.clientX, startY = e.clientY, ox = item.px, oy = item.py;
+      var scale = window.SBS.pane(item.role).geom.scale;
+      function move(ev) {
+        item.px = ox + (ev.clientX - startX) / scale;
+        item.py = oy + (ev.clientY - startY) / scale;
+        render(item);
+      }
       function up() {
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', up);
@@ -112,34 +161,39 @@
     });
   }
 
-  var draft = null;
-  layer.addEventListener('pointerdown', function (e) {
-    if (e.target !== layer || tool === 'scroll') return;
-    e.preventDefault(); // keep focus in the new comment box
-    var p = localPoint(e);
-    if (tool === 'pin') { addItem('pin', p.x, p.y); return; }
-    layer.setPointerCapture(e.pointerId);
-    draft = { x: p.x, y: p.y, el: document.createElement('div') };
-    draft.el.className = 'draft';
-    layer.appendChild(draft.el);
-  });
-  layer.addEventListener('pointermove', function (e) {
-    if (!draft) return;
-    var p = localPoint(e);
-    var x = Math.min(p.x, draft.x), y = Math.min(p.y, draft.y);
-    Object.assign(draft.el.style, {
-      left: x + 'px', top: y + 'px',
-      width: Math.abs(p.x - draft.x) + 'px', height: Math.abs(p.y - draft.y) + 'px',
+  ROLES.forEach(function (role) {
+    var layer = layers[role];
+    var draft = null;
+    layer.addEventListener('pointerdown', function (e) {
+      if (e.target !== layer || tool === 'scroll') return;
+      e.preventDefault(); // keep focus in the new comment box
+      var p = localPoint(layer, e);
+      if (tool === 'pin') { addItem(role, 'pin', toPage(role, p.x, p.y)); return; }
+      layer.setPointerCapture(e.pointerId);
+      draft = { x: p.x, y: p.y, el: document.createElement('div') };
+      draft.el.className = 'draft';
+      layer.appendChild(draft.el);
     });
-  });
-  layer.addEventListener('pointerup', function (e) {
-    if (!draft) return;
-    var p = localPoint(e);
-    var x = Math.min(p.x, draft.x), y = Math.min(p.y, draft.y);
-    var w = Math.abs(p.x - draft.x), h = Math.abs(p.y - draft.y);
-    draft.el.remove();
-    draft = null;
-    if (w > 8 && h > 8) addItem('box', x, y, w, h);
+    layer.addEventListener('pointermove', function (e) {
+      if (!draft) return;
+      var p = localPoint(layer, e);
+      Object.assign(draft.el.style, {
+        left: Math.min(p.x, draft.x) + 'px', top: Math.min(p.y, draft.y) + 'px',
+        width: Math.abs(p.x - draft.x) + 'px', height: Math.abs(p.y - draft.y) + 'px',
+      });
+    });
+    layer.addEventListener('pointerup', function (e) {
+      if (!draft) return;
+      var p = localPoint(layer, e);
+      var x = Math.min(p.x, draft.x), y = Math.min(p.y, draft.y);
+      var w = Math.abs(p.x - draft.x), h = Math.abs(p.y - draft.y);
+      draft.el.remove();
+      draft = null;
+      if (w > 8 && h > 8) {
+        var scale = window.SBS.pane(role).geom.scale;
+        addItem(role, 'box', toPage(role, x, y), { w: w / scale, h: h / scale });
+      }
+    });
   });
 
   $('clearAnn').addEventListener('click', function () {
@@ -158,7 +212,10 @@
       '**Viewport:** ' + c.viewport + ' · **Layout:** ' + c.layout,
       '**Compare:** ' + c.share,
     ];
-    var notes = items.map(function (it, i) { return (i + 1) + '. ' + (it.textarea.value.trim() || '(no comment)'); });
+    var notes = items.map(function (it, i) {
+      var where = LABEL[it.role] + (it.path !== c.path ? ' ' + it.path : '');
+      return (i + 1) + '. [' + where + '] ' + (it.textarea.value.trim() || '(no comment)');
+    });
     if (notes.length) lines.push('', notes.join('\n'));
     if (summary.value.trim()) lines.push('', summary.value.trim());
     return lines.join('\n');

@@ -26,6 +26,8 @@
       reload: el.querySelector('[data-reload]'),
       origin: null, // target site origin, e.g. https://www.example.com
       path: '/',
+      scroll: { x: 0, y: 0 },   // the page's scroll position (CSS px)
+      geom: { left: 0, scale: 1 }, // where the page sits inside the pane
     };
   });
   var other = function (role) { return role === 'live' ? 'staging' : 'live'; };
@@ -74,9 +76,15 @@
   }
 
   // --- loading -----------------------------------------------------------
+  function emit(name, role) {
+    window.dispatchEvent(new CustomEvent('sbs:' + name, { detail: { role: role } }));
+  }
+
   function load(role, path) {
     var pane = panes[role];
     pane.path = path;
+    pane.scroll = { x: 0, y: 0 };
+    emit('nav', role);
     updateLabel(role);
     pane.iframe.src = '/x/' + encodeSite(pane.origin) + path;
   }
@@ -144,6 +152,8 @@
         break;
 
       case 'scroll':
+        panes[role].scroll = { x: msg.x, y: msg.y };
+        emit('scroll', role);
         if ((pendingAlign && role === 'live') || (els.syncScroll.checked && role === leader)) {
           pendingAlign = false;
           send(other(role), {
@@ -158,7 +168,9 @@
         break;
 
       case 'nav':
+        if (panes[role].path !== msg.path) panes[role].scroll = { x: 0, y: 0 };
         panes[role].path = msg.path;
+        emit('nav', role);
         // The site can change on redirect, e.g. example.com -> www.example.com.
         if (msg.site) panes[role].origin = decodeSite(msg.site);
         updateLabel(role);
@@ -201,8 +213,11 @@
       pane.viewport.style.height = (h / scale) + 'px';
       pane.viewport.style.transform = scale < 1 ? 'scale(' + scale + ')' : '';
       // Center narrow (mobile/tablet) viewports in the pane.
-      pane.viewport.style.left = scale === 1 ? Math.max(0, (w - width) / 2) + 'px' : '0';
+      var left = scale === 1 ? Math.max(0, (w - width) / 2) : 0;
+      pane.viewport.style.left = left + 'px';
+      pane.geom = { left: left, scale: scale };
     });
+    emit('layout');
   }
   var ro = new ResizeObserver(layoutViewports);
   ROLES.forEach(function (r) { ro.observe(panes[r].host); });
@@ -312,6 +327,10 @@
   // Used by annotate.js to label screenshots and notes.
   window.SBS = {
     toast: toast,
+    pane: function (role) {
+      var p = panes[role];
+      return { host: p.host, path: p.path, scroll: p.scroll, geom: p.geom, origin: p.origin };
+    },
     context: function () {
       syncQuery();
       var opt = function (sel) { return sel.options[sel.selectedIndex].text; };

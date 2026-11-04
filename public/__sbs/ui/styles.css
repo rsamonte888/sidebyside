@@ -247,9 +247,10 @@ body.login { align-items: center; justify-content: center; }
 .notes-panel button.primary { padding: 8px; }
 
 /* overlay above both panes */
-.annotations { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
-.annotations:not([data-tool="scroll"]) { pointer-events: auto; cursor: crosshair; }
-.annotations .draft { position: absolute; border: 3px dashed var(--ann); background: rgba(225, 29, 72, .08); }
+/* one layer per pane, clipped to that pane */
+.ann-layer { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.stage:not([data-tool="scroll"]) .ann-layer { pointer-events: auto; cursor: crosshair; }
+.ann-layer .draft { position: absolute; border: 3px dashed var(--ann); background: rgba(225, 29, 72, .08); }
 
 .ann { position: absolute; pointer-events: none; }
 .ann-num {
