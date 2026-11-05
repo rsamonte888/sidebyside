@@ -192,3 +192,31 @@ test('figma render endpoint talks to the Figma API with the token', async () => 
     app.close();
   }
 });
+
+test('buildGroups on the real Winona Figma structure', async () => {
+  const { buildGroups, deviceOf } = await import('../lib/core.js');
+  const fs = await import('node:fs');
+  const load = (f) => JSON.parse(fs.readFileSync(new URL('./fixtures/' + f, import.meta.url)));
+
+  const quiz = buildGroups(load('quiz-section.json'));
+  assert.equal(quiz.length, 21, 'one screen per quiz section');
+  assert.equal(quiz[0].name, '1-start v2', 'numbered screens follow the quiz order');
+  assert.equal(quiz[1].name, '2-age');
+  const age = quiz[1];
+  assert.deepEqual(age.frames.map((f) => [f.device, f.w]), [['desktop', 1440], ['tablet', 834], ['mobile', 390]]);
+  assert.ok(!quiz.some((g) => g.frames.some((f) => f.name === 'Header')), 'header label strips are not screens');
+  const lander = quiz.find((g) => g.name === 'Post lander');
+  assert.ok(lander, 'device sub-sections merge into one screen');
+  assert.deepEqual([...new Set(lander.frames.map((f) => f.device))], ['desktop', 'tablet', 'mobile']);
+
+  const journal = buildGroups(load('journal-section.json'));
+  assert.equal(journal.length, 1);
+  assert.equal(journal[0].name, 'Redesign Journal article');
+  assert.ok(!journal[0].frames.some((f) => f.h < 400), 'small label frames are skipped');
+  assert.equal(journal[0].frames[0].name, 'Desktop/Journal/Article/V2');
+
+  assert.equal(deviceOf('mobile-2-age', 390), 'mobile');
+  assert.equal(deviceOf('Tablet/Journal/Article/V2', 834), 'tablet');
+  assert.equal(deviceOf('Frame 12', 1440), 'desktop');
+  assert.equal(deviceOf('Frame 12', 700), 'tablet');
+});

@@ -16,7 +16,7 @@
       </span>
       <label class="field">
         <span class="tag live">Live</span>
-        <input id="liveUrl" type="text" placeholder="https://www.yoursite.com or a Figma frame link" spellcheck="false">
+        <input id="liveUrl" type="text" placeholder="https://www.yoursite.com or a Figma link" spellcheck="false">
       </label>
       <label class="field">
         <span class="tag staging">Staging</span>
@@ -47,6 +47,15 @@
         <button type="button" data-view="both" class="active" title="Show live and staging">Both</button>
         <button type="button" data-view="live" title="Show only the live site, full width">Live only</button>
         <button type="button" data-view="staging" title="Show only staging, full width">Staging only</button>
+      </span>
+
+      <span id="designControls" class="design-controls" hidden>
+        <span class="seg" role="group" aria-label="Design size">
+          <button type="button" data-device="desktop" title="Desktop frame">Desktop</button>
+          <button type="button" data-device="tablet" title="Tablet frame">Tablet</button>
+          <button type="button" data-device="mobile" title="Mobile frame">Mobile</button>
+        </span>
+        <button id="framesBtn" type="button" title="Pick another screen from the Figma file">Frames…</button>
       </span>
 
       <span class="sep"></span>
@@ -142,6 +151,17 @@
   </aside>
   </div>
 
+  <dialog id="picker" class="picker">
+    <div class="pk-head">
+      <button id="pickerBack" type="button" hidden title="Back to pages">‹ Pages</button>
+      <b id="pickerTitle">Figma</b>
+      <input id="pickerSearch" type="search" placeholder="Search screens…" autocomplete="off">
+      <button id="pickerRefresh" type="button" title="Reload from Figma">↻</button>
+      <button id="pickerClose" type="button" title="Close">×</button>
+    </div>
+    <div id="pickerBody" class="pk-body"></div>
+  </dialog>
+
   <dialog id="shotDialog" class="shot-dialog">
     <div class="shot-head">
       <b>Screenshot</b>
@@ -158,5 +178,6 @@
   <div id="toast" class="toast" role="status" hidden></div>
   <script src="/__sbs/ui/app.js"></script>
   <script src="/__sbs/ui/annotate.js"></script>
+  <script src="/__sbs/ui/picker.js"></script>
 </body>
 </html>

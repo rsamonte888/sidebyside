@@ -98,7 +98,7 @@
 
   function render(it) {
     var pane = window.SBS.pane(it.role);
-    var onPage = pane.path === it.path;
+    var onPage = pane.path === it.path && (!it.vp || it.vp === window.SBS.viewport());
     it.el.style.display = onPage ? '' : 'none';
     if (!onPage) return;
     var pos = toLayer(it.role, it.px, it.py);
@@ -138,6 +138,9 @@
 
     var item = {
       el: el, kind: kind, role: role, path: opts.path || window.SBS.pane(role).path,
+      // The viewport it was made at: layouts change between sizes, so a note
+      // made on Mobile only shows on Mobile.
+      vp: opts.vp !== undefined ? opts.vp : window.SBS.viewport(),
       px: page.x, py: page.y, pw: size ? size.w : 0, ph: size ? size.h : 0,
       textarea: el.querySelector('textarea'),
     };
@@ -274,7 +277,7 @@
           return {
             r: it.role === 'live' ? 'l' : 's', k: it.kind === 'box' ? 'b' : 'p', p: it.path,
             x: Math.round(it.px), y: Math.round(it.py), w: Math.round(it.pw), h: Math.round(it.ph),
-            t: it.textarea.value,
+            t: it.textarea.value, v: it.vp,
           };
         }),
         sum: summary.value,
@@ -284,7 +287,7 @@
       if (!data || data.v !== 1) return;
       (data.items || []).forEach(function (d) {
         addItem(d.r === 'l' ? 'live' : 'staging', d.k === 'b' ? 'box' : 'pin', { x: d.x, y: d.y },
-          d.k === 'b' ? { w: d.w, h: d.h } : null, { path: d.p, text: d.t, silent: true });
+          d.k === 'b' ? { w: d.w, h: d.h } : null, { path: d.p, text: d.t, silent: true, vp: d.v || '' });
       });
       if (data.sum) summary.value = data.sum;
       setOpen(true);
