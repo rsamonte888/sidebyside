@@ -70,7 +70,7 @@ test('proxy end to end: headers, rewriting, cookies, redirects, referer fallback
     const self = `http://127.0.0.1:${upstream.address().port}`;
     if (req.url === '/redirect') return res.writeHead(301, { location: `${self}/landing` }).end();
     if (req.url === '/api/x') return res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
-    const body = zlib.gzipSync(`<html><head></head><body><a href="${self}/x">x</a><img src="/i.png"></body></html>`);
+    const body = zlib.gzipSync(`<html><head><script>window.__NUXT__={}</script></head><body><a href="${self}/x">x</a><img src="/i.png"></body></html>`);
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8', 'content-encoding': 'gzip',
       'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'",
@@ -219,4 +219,40 @@ test('buildGroups on the real Winona Figma structure', async () => {
   assert.equal(deviceOf('Tablet/Journal/Article/V2', 834), 'tablet');
   assert.equal(deviceOf('Frame 12', 1440), 'desktop');
   assert.equal(deviceOf('Frame 12', 700), 'tablet');
+});
+
+test('single-page-app mode for non-Nuxt sites: marked agent, per-site cookie namespace', async () => {
+  const seenCookies = [];
+  const upstream = http.createServer((req, res) => {
+    seenCookies.push(req.headers.cookie || '');
+    if (req.url === '/api/me') {
+      res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': ['token=abc; Path=/api; HttpOnly'] });
+      return res.end('{}');
+    }
+    res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': ['sid=1; Path=/'] });
+    res.end('<html><head></head><body><div id="app"></div><script src="/js/app.js"></script></body></html>');
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => upstream.once('listening', r));
+  const site = `http:127.0.0.1:${upstream.address().port}`;
+  const app = createServer().listen(0, '127.0.0.1');
+  await new Promise((r) => app.once('listening', r));
+  const base = `http://127.0.0.1:${app.address().port}`;
+  const P = `/x/${site}`;
+  const ns = '__sbsc_' + site.replace(/[^a-z0-9]/gi, '_') + '__';
+  try {
+    const page = await fetch(`${base}${P}/eligibility`);
+    const html = await page.text();
+    assert.ok(html.includes(`<script src="/__sbs/agent.js" data-spa="${P}">`), 'agent runs in single-page-app mode');
+    assert.ok(html.includes(`src="${P}/js/app.js"`), 'root-relative script still prefixed');
+    assert.equal(page.headers.getSetCookie()[0], `${ns}sid=1; Path=/`);
+
+    // a request made by the app (tagged by the agent) gets namespaced cookies too
+    const api = await fetch(`${base}${P}/api/me`, { headers: { 'x-sbs-spa': '1', cookie: `${ns}sid=1; __sbsc_other_site__sid=2; __sbs_auth=x; plain=1` } });
+    assert.equal(api.headers.getSetCookie()[0], `${ns}token=abc; HttpOnly; Path=/`);
+    // upstream sees this site's cookies under their real names, not other sites' or ours
+    assert.equal(seenCookies.at(-1), 'sid=1; plain=1');
+  } finally {
+    upstream.close();
+    app.close();
+  }
 });

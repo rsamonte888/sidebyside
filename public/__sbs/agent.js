@@ -5,6 +5,151 @@
   if (window.top === window || window.__sbsAgent) return;
   window.__sbsAgent = true;
 
+  // --- single-page-app mode ------------------------------------------------
+  // Nuxt sites are told about the /x/<site> prefix through their baseURL. Other
+  // apps (plain Vue/React builds) have their router base and file paths fixed
+  // at build time, so for those the server marks this script with data-spa:
+  // we hide the prefix from the app's address before it starts, and put the
+  // prefix back on every request the app makes to its own site.
+  var SPA = (document.currentScript && document.currentScript.getAttribute('data-spa')) || '';
+  if (SPA) setupSpa(SPA);
+
+  function setupSpa(P) {
+    var KEY = P.slice(3).replace(/[^a-z0-9]/gi, '_');
+
+    // 1. The app should see its real path, e.g. /eligibility.
+    if (location.pathname.indexOf(P) === 0) {
+      history.replaceState(history.state, '', (location.pathname.slice(P.length) || '/') + location.search + location.hash);
+    }
+
+    // 2. Requests to this origin get the prefix back.
+    function fix(u) {
+      if (u == null) return u;
+      var str = String(u);
+      if (!str || str.charAt(0) === '#' || /^(data|blob|javascript|mailto|tel|about):/i.test(str)) return u;
+      var a;
+      try { a = new URL(str, location.href); } catch (e) { return u; }
+      if (a.origin !== location.origin) return u;
+      if (a.pathname.indexOf('/x/') === 0 || a.pathname.indexOf('/__sbs/') === 0) return u;
+      return P + a.pathname + a.search + a.hash;
+    }
+    var mine = function (u) { return typeof u === 'string' && u.indexOf(P + '/') === 0; };
+
+    function patchProp(Ctor, prop) {
+      if (!Ctor) return;
+      var d = Object.getOwnPropertyDescriptor(Ctor.prototype, prop);
+      if (!d || !d.set) return;
+      Object.defineProperty(Ctor.prototype, prop, {
+        configurable: true, enumerable: d.enumerable, get: d.get,
+        set: function (v) { d.set.call(this, fix(v)); },
+      });
+    }
+    [[window.HTMLScriptElement, 'src'], [window.HTMLLinkElement, 'href'], [window.HTMLImageElement, 'src'],
+     [window.HTMLMediaElement, 'src'], [window.HTMLSourceElement, 'src'], [window.HTMLTrackElement, 'src'],
+     [window.HTMLIFrameElement, 'src'], [window.HTMLEmbedElement, 'src'], [window.HTMLObjectElement, 'data']]
+      .forEach(function (x) { patchProp(x[0], x[1]); });
+
+    var setAttr = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (name, value) {
+      var n = String(name).toLowerCase();
+      if ((n === 'src' && /^(SCRIPT|IMG|AUDIO|VIDEO|SOURCE|TRACK|IFRAME|EMBED)$/.test(this.tagName)) ||
+          (n === 'href' && this.tagName === 'LINK')) value = fix(value);
+      return setAttr.call(this, name, value);
+    };
+
+    var origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = function (input, init) {
+        var url = typeof input === 'string' || input instanceof URL ? String(input) : input && input.url;
+        var fixed = fix(url);
+        if (!mine(fixed)) return origFetch.call(this, input, init);
+        var headers = new Headers((init && init.headers) || (input && input.headers) || undefined);
+        headers.set('x-sbs-spa', '1');
+        if (input && typeof input === 'object' && !(input instanceof URL)) input = new Request(fixed, input);
+        else input = fixed;
+        return origFetch.call(this, input, Object.assign({}, init, { headers: headers }));
+      };
+    }
+    var xhrOpen = XMLHttpRequest.prototype.open, xhrSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      var args = Array.prototype.slice.call(arguments);
+      args[1] = fix(url);
+      this.__sbsMine = mine(args[1]);
+      return xhrOpen.apply(this, args);
+    };
+    XMLHttpRequest.prototype.send = function () {
+      if (this.__sbsMine) { try { this.setRequestHeader('x-sbs-spa', '1'); } catch (e) { /* ignore */ } }
+      return xhrSend.apply(this, arguments);
+    };
+    if (window.Audio) {
+      var OrigAudio = window.Audio;
+      var PatchedAudio = function (src) { return arguments.length ? new OrigAudio(fix(src)) : new OrigAudio(); };
+      PatchedAudio.prototype = OrigAudio.prototype;
+      window.Audio = PatchedAudio;
+    }
+    if (navigator.sendBeacon) {
+      var beacon = navigator.sendBeacon.bind(navigator);
+      navigator.sendBeacon = function (url, data) { return beacon(fix(url), data); };
+    }
+    if (window.EventSource) {
+      var OrigES = window.EventSource;
+      var PatchedES = function (url, opts) { return new OrigES(fix(url), opts); };
+      PatchedES.prototype = OrigES.prototype;
+      window.EventSource = PatchedES;
+    }
+    // Full-page link clicks and form posts the app doesn't handle itself.
+    window.addEventListener('click', function (e) {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      var a = e.target && e.target.closest && e.target.closest('a[href]');
+      if (!a || (a.target && a.target !== '_self') || a.hasAttribute('download')) return;
+      var f = fix(a.href);
+      if (mine(f)) { e.preventDefault(); location.assign(f); }
+    });
+    window.addEventListener('submit', function (e) {
+      if (e.defaultPrevented || !e.target || !e.target.action) return;
+      var f = fix(e.target.action);
+      if (mine(f)) e.target.action = f;
+    });
+
+    // 3. Cookies and storage are kept per site, so live and staging (often the
+    //    same app) don't overwrite each other. The server renames this site's
+    //    cookies to the same namespace.
+    var NS = '__sbsc_' + KEY + '__';
+    var cookieDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie');
+    if (cookieDesc && cookieDesc.get) {
+      Object.defineProperty(document, 'cookie', {
+        configurable: true,
+        get: function () {
+          return cookieDesc.get.call(document).split(/;\s*/)
+            .filter(function (c) { return c.indexOf(NS) === 0; })
+            .map(function (c) { return c.slice(NS.length); }).join('; ');
+        },
+        set: function (v) {
+          var parts = String(v).split(';');
+          var rest = parts.slice(1).filter(function (x) { return !/^\s*(path|domain)\s*=/i.test(x); });
+          cookieDesc.set.call(document, [NS + parts[0].trim()].concat(rest, [' path=/']).join(';'));
+        },
+      });
+    }
+    var SP = window.Storage && Storage.prototype;
+    if (SP) {
+      var SNS = 'sbs:' + KEY + ':';
+      var get = SP.getItem, set = SP.setItem, remove = SP.removeItem, key = SP.key;
+      var lenDesc = Object.getOwnPropertyDescriptor(SP, 'length');
+      var own = function (st) {
+        var out = [], n = lenDesc.get.call(st);
+        for (var i = 0; i < n; i++) { var k = key.call(st, i); if (k && k.indexOf(SNS) === 0) out.push(k); }
+        return out;
+      };
+      SP.getItem = function (k) { return get.call(this, SNS + k); };
+      SP.setItem = function (k, v) { return set.call(this, SNS + k, v); };
+      SP.removeItem = function (k) { return remove.call(this, SNS + k); };
+      SP.key = function (i) { var k = own(this)[i]; return k == null ? null : k.slice(SNS.length); };
+      SP.clear = function () { var st = this; own(st).forEach(function (k) { remove.call(st, k); }); };
+      Object.defineProperty(SP, 'length', { configurable: true, get: function () { return own(this).length; } });
+    }
+  }
+
   var parentWin = window.parent;
   function post(msg) {
     msg.__sbs = 1;
@@ -107,10 +252,12 @@
   // --- navigation --------------------------------------------------------
   // Pages are served under /x/<site>/...; report paths without that prefix.
   function prefix() {
+    if (SPA) return SPA;
     var m = /^\/x\/[^/]+/.exec(location.pathname);
     return m ? m[0] : '';
   }
   function currentPath() {
+    if (SPA) return location.pathname + location.search + location.hash; // already without the prefix
     return (location.pathname.slice(prefix().length) || '/') + location.search + location.hash;
   }
   var lastPath = null;
@@ -131,6 +278,13 @@
     if (app && app.config.globalProperties.$router) return app.config.globalProperties.$router;
     // Nuxt 2 / Vue 2
     if (window.$nuxt && window.$nuxt.$router) return window.$nuxt.$router;
+    // plain Vue 2 apps keep their instance on the mount element
+    var els = [document.getElementById('app')].concat(Array.prototype.slice.call(document.body ? document.body.children : []));
+    for (var i = 0; i < els.length; i++) {
+      var vm = els[i] && els[i].__vue__;
+      if (vm && vm.$router) return vm.$router;
+      if (els[i] && els[i].__vue_app__ && els[i].__vue_app__.config.globalProperties.$router) return els[i].__vue_app__.config.globalProperties.$router;
+    }
     return null;
   }
 

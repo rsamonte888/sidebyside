@@ -64,6 +64,16 @@ On the way through, the proxy:
 - scopes each site's cookies to its own prefix, so live and staging sessions don't collide
 - injects `/__sbs/agent.js`, which reports scroll and navigation to the UI with `postMessage` and applies commands from the other pane
 
+## Single-page apps (non-Nuxt sites)
+
+Sites built as plain single-page apps (e.g. a Vue CLI / webpack build such as app.bywinona.com) have their router base and file paths fixed at build time, so the Nuxt `baseURL` rewrite can't help them. For any page without Nuxt's runtime config, the proxy marks the injected agent with `data-spa`, and the agent then:
+
+- changes the frame's address from `/x/<site>/path` to `/path` before the app starts, so the router sees the real path
+- puts the `/x/<site>` prefix back on the app's own requests (scripts, styles, images, audio, `fetch`, XHR, beacons, plain links and forms)
+- keeps each site's cookies and `localStorage`/`sessionStorage` in a per-site namespace, so live and staging (often the same app) don't overwrite each other
+
+Nuxt sites are unaffected.
+
 ## Known limitations
 
 - **APIs on other domains.** If the site calls an API on a different domain (e.g. `api.yoursite.com`) from the browser, that API sees the Side by Side origin and may reject it through CORS. Same-origin `/api/...` calls work.
