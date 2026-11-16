@@ -14,6 +14,164 @@
   var SPA = (document.currentScript && document.currentScript.getAttribute('data-spa')) || '';
   if (SPA) setupSpa(SPA);
 
+  // --- emulated device ("Switch to device") -----------------------------------
+  // The server marks the script with the device's profile. The page then sees
+  // that device (user agent, touch, pixel density), and the mouse behaves like
+  // a finger: press-and-drag sends touch events, drags scroll the page, and
+  // swipes are mirrored to the other pane. A quick tap is still a normal click.
+  var DEV = null;
+  try { DEV = JSON.parse((document.currentScript && document.currentScript.getAttribute('data-device')) || 'null'); } catch (e) { DEV = null; }
+  if (DEV) setupDevice(DEV);
+
+  function setupDevice(D) {
+    var apple = D.os === 'ios' || D.os === 'ipados';
+    var def = function (obj, prop, get) {
+      try { Object.defineProperty(obj, prop, { configurable: true, get: get }); } catch (e) { /* ignore */ }
+    };
+    def(navigator, 'userAgent', function () { return D.ua; });
+    def(navigator, 'appVersion', function () { return D.ua.replace(/^Mozilla\//, ''); });
+    def(navigator, 'platform', function () { return D.os === 'ios' ? 'iPhone' : D.os === 'ipados' ? 'MacIntel' : 'Linux armv81'; });
+    def(navigator, 'vendor', function () { return apple ? 'Apple Computer, Inc.' : 'Google Inc.'; });
+    def(navigator, 'maxTouchPoints', function () { return 5; });
+    def(navigator, 'userAgentData', function () {
+      if (apple) return undefined; // Safari doesn't have it
+      return {
+        mobile: !!D.mobile, platform: 'Android',
+        brands: [{ brand: 'Chromium', version: '138' }, { brand: 'Google Chrome', version: '138' }],
+        getHighEntropyValues: function () { return Promise.resolve({ mobile: !!D.mobile, platform: 'Android', model: '' }); },
+      };
+    });
+    def(window, 'devicePixelRatio', function () { return D.dpr; });
+    def(screen, 'width', function () { return window.innerWidth; });
+    def(screen, 'availWidth', function () { return window.innerWidth; });
+    if (!('ontouchstart' in window)) { try { window.ontouchstart = null; } catch (e) { /* ignore */ } }
+    // JS media checks for touch screens (CSS @media rules can't be changed).
+    var mm = window.matchMedia && window.matchMedia.bind(window);
+    if (mm) {
+      window.matchMedia = function (q) {
+        return mm(String(q)
+          .replace(/\(\s*(any-)?pointer\s*:\s*coarse\s*\)/gi, '(min-width: 0px)')
+          .replace(/\(\s*(any-)?pointer\s*:\s*fine\s*\)/gi, '(max-width: 0px)')
+          .replace(/\(\s*(any-)?hover\s*:\s*none\s*\)/gi, '(min-width: 0px)')
+          .replace(/\(\s*(any-)?hover\s*:\s*hover\s*\)/gi, '(max-width: 0px)'));
+      };
+    }
+
+    // Mouse -> touch
+    var canTouch = typeof Touch === 'function' && typeof TouchEvent === 'function';
+    function fireTouch(type, target, x, y, id, ended) {
+      if (!canTouch) return { defaultPrevented: false };
+      try {
+        var t = new Touch({ identifier: id, target: target, clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY, screenX: x, screenY: y, radiusX: 11, radiusY: 11, force: 1 });
+        var list = ended ? [] : [t];
+        var ev = new TouchEvent(type, { bubbles: true, cancelable: true, composed: true, touches: list, targetTouches: list, changedTouches: [t] });
+        target.dispatchEvent(ev);
+        return ev;
+      } catch (e) { return { defaultPrevented: false }; }
+    }
+    function scrollableParent(el) {
+      for (var n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+        var st = getComputedStyle(n);
+        if (/(auto|scroll)/.test(st.overflowY) && n.scrollHeight > n.clientHeight + 1) return n;
+      }
+      return null;
+    }
+    var drag = null, touchId = 1;
+    var swallow = function (e) { if (e.isTrusted) e.stopImmediatePropagation(); };
+    window.addEventListener('mousedown', function (e) {
+      if (e.button !== 0 || !e.isTrusted) return;
+      var t = e.target;
+      // Typing and selecting in form fields stays mouse-driven.
+      if (t.closest && t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+      e.stopImmediatePropagation(); // a phone sends touches, not mouse presses
+      drag = { id: touchId++, target: t, x0: e.clientX, y0: e.clientY, lx: e.clientX, ly: e.clientY, moved: false, claimed: false, horiz: false, t0: performance.now(), path: [], scroller: scrollableParent(t) };
+      fireTouch('touchstart', t, e.clientX, e.clientY, drag.id);
+    }, true);
+    window.addEventListener('mousemove', function (e) {
+      if (!drag) return;
+      swallow(e);
+      var dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+      if (!drag.moved) {
+        if (Math.abs(dx) + Math.abs(dy) < 6) return;
+        drag.moved = true;
+        drag.horiz = Math.abs(dx) > Math.abs(dy);
+        document.documentElement.style.userSelect = 'none';
+      }
+      if (fireTouch('touchmove', drag.target, e.clientX, e.clientY, drag.id).defaultPrevented) drag.claimed = true;
+      if (!drag.claimed && !drag.horiz) {
+        var by = drag.ly - e.clientY; // drag up -> page moves up
+        if (drag.scroller) drag.scroller.scrollTop += by; else window.scrollBy(0, by);
+      }
+      drag.lx = e.clientX; drag.ly = e.clientY;
+      drag.path.push([dx, dy, Math.round(performance.now() - drag.t0)]);
+    }, true);
+    window.addEventListener('mouseup', function (e) {
+      if (!drag || e.button !== 0) return;
+      var d = drag;
+      drag = null;
+      document.documentElement.style.userSelect = '';
+      fireTouch('touchend', d.target, e.clientX, e.clientY, d.id, true);
+      if (!d.moved) {
+        // A tap: let the page see the press it missed, then the normal click follows.
+        try {
+          d.target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: d.x0, clientY: d.y0, button: 0, buttons: 1, view: window }));
+        } catch (err) { /* ignore */ }
+        return;
+      }
+      swallow(e);
+      // A swipe isn't a click.
+      var stopClick = function (ev) { ev.stopImmediatePropagation(); ev.preventDefault(); };
+      window.addEventListener('click', stopClick, true);
+      setTimeout(function () { window.removeEventListener('click', stopClick, true); }, 0);
+      if (d.horiz || d.claimed) {
+        var r = d.target.getBoundingClientRect();
+        post({
+          type: 'swipe',
+          ref: { tag: d.target.tagName.toLowerCase(), text: norm(d.target).slice(0, 120), path: cssPath(d.target) },
+          start: [(d.x0 - r.left) / Math.max(1, r.width), (d.y0 - r.top) / Math.max(1, r.height)],
+          size: [r.width, r.height],
+          path: d.path,
+        });
+      }
+    }, true);
+    document.addEventListener('dragstart', function (e) { if (drag) e.preventDefault(); }, true);
+
+    // Replaying a swipe from the other pane on the matching element.
+    window.__sbsReplaySwipe = function (msg) {
+      var el = null;
+      if (msg.ref.text && msg.ref.text.length >= 2) {
+        var m = Array.prototype.filter.call(document.getElementsByTagName(msg.ref.tag), function (x) { return norm(x).slice(0, 120) === msg.ref.text; });
+        el = m[0] || null;
+      }
+      if (!el && msg.ref.path) { try { el = document.querySelector(msg.ref.path); } catch (e) { el = null; } }
+      if (!el) { post({ type: 'clickMissed', text: 'the swiped element' }); return; }
+      var r = el.getBoundingClientRect();
+      var kx = r.width / Math.max(1, msg.size[0]), ky = r.height / Math.max(1, msg.size[1]);
+      var x0 = r.left + msg.start[0] * r.width, y0 = r.top + msg.start[1] * r.height;
+      var id = touchId++, i = 0, t0 = performance.now();
+      var pointer = function (type, x, y) {
+        try {
+          el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 900 + id, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1 }));
+        } catch (e) { /* ignore */ }
+      };
+      pointer('pointerdown', x0, y0);
+      fireTouch('touchstart', el, x0, y0, id);
+      var last = [x0, y0];
+      (function step() {
+        var now = performance.now() - t0;
+        while (i < msg.path.length && msg.path[i][2] <= now) {
+          last = [x0 + msg.path[i][0] * kx, y0 + msg.path[i][1] * ky];
+          pointer('pointermove', last[0], last[1]);
+          fireTouch('touchmove', el, last[0], last[1], id);
+          i++;
+        }
+        if (i < msg.path.length) { requestAnimationFrame(step); return; }
+        pointer('pointerup', last[0], last[1]);
+        fireTouch('touchend', el, last[0], last[1], id, true);
+      })();
+    };
+  }
+
   function setupSpa(P) {
     var KEY = P.slice(3).replace(/[^a-z0-9]/gi, '_');
 
@@ -362,6 +520,7 @@
     if (msg.type === 'scrollTo') scrollTo(msg);
     else if (msg.type === 'navigate') navigate(msg.path);
     else if (msg.type === 'click') replayClick(msg);
+    else if (msg.type === 'swipe' && window.__sbsReplaySwipe) window.__sbsReplaySwipe(msg);
     else if (msg.type === 'scrollBy') {
       // Wheel scrolling forwarded from the app while an annotation tool is on.
       if (scroller && document.contains(scroller)) scroller.scrollBy(msg.dx, msg.dy);

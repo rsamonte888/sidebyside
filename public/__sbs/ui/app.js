@@ -61,7 +61,7 @@
     return (u.protocol === 'http:' ? 'http:' : '') + u.host.toLowerCase();
   }
   function decodeSite(seg) {
-    seg = decodeURIComponent(seg || '');
+    seg = decodeURIComponent(seg || '').split('@')[0]; // drop an emulated device
     return seg.indexOf('http:') === 0 ? 'http://' + seg.slice(5) : 'https://' + seg;
   }
 
@@ -191,9 +191,220 @@
       pane.iframe.removeAttribute('src'); // waiting for a frame to be picked
       return;
     }
+    var emu = emuFor(role);
     pane.iframe.src = pane.figma
       ? '/__sbs/ui/design.html?figma=' + encodeURIComponent(pane.figma)
-      : '/x/' + encodeSite(pane.origin) + path;
+      : '/x/' + encodeSite(pane.origin) + (emu ? '@' + emu.id : '') + path;
+  }
+
+  // --- emulated devices (opt-in: "Switch to device") ------------------------
+  // Each pane can show its site on a phone or tablet: the frame is drawn here,
+  // the page gets the device's width, and the server sends the device's user
+  // agent (the device rides along in the address, /x/<site>@<device>/...).
+  // Everything else (sync, annotations, sharing) works the same.
+  var EMU = {};
+  (window.SBS_DEVICES || []).forEach(function (d) { EMU[d.id] = d; });
+  var deviceMode = false;
+  var modeBeforeDevices = null;
+  ROLES.forEach(function (r) { panes[r].emu = r === 'live' ? 'pixel-9' : 'iphone-15'; });
+
+  function emuFor(role) {
+    var p = panes[role];
+    return deviceMode && !p.figmaSource && EMU[p.emu] ? EMU[p.emu] : null;
+  }
+
+  var deviceBtn = $('deviceBtn');
+  function setDeviceMode(on, initial) {
+    deviceMode = !!on;
+    document.body.classList.toggle('device-mode', deviceMode);
+    deviceBtn.setAttribute('aria-pressed', String(deviceMode));
+    deviceBtn.textContent = deviceMode ? '🖥 Switch to desktop' : '📱 Switch to device';
+    // Phones have different heights, so match scroll by position on the page.
+    if (deviceMode && modeBeforeDevices === null) {
+      modeBeforeDevices = els.scrollMode.value;
+      els.scrollMode.value = 'pct';
+    } else if (!deviceMode && modeBeforeDevices !== null) {
+      els.scrollMode.value = modeBeforeDevices;
+      modeBeforeDevices = null;
+    }
+    updateDeviceControls();
+    if (initial) return;
+    ROLES.forEach(function (r) { if (panes[r].origin) load(r, panes[r].path); });
+    layoutViewports();
+    syncQuery();
+  }
+  deviceBtn.addEventListener('click', function () { setDeviceMode(!deviceMode); });
+
+  function setEmu(role, id) {
+    if (!EMU[id]) return;
+    panes[role].emu = id;
+    store.set('emu-' + role, id);
+    updateDeviceControls();
+    if (deviceMode && panes[role].origin) load(role, panes[role].path);
+    layoutViewports();
+    syncQuery();
+  }
+
+  ROLES.forEach(function (role) {
+    var pane = panes[role];
+    pane.emuSelect = pane.el.querySelector('[data-device-select]');
+    pane.foldBtn = pane.el.querySelector('[data-fold]');
+    ['iPhone', 'iPad', 'Android'].forEach(function (g) {
+      var og = document.createElement('optgroup');
+      og.label = g;
+      (window.SBS_DEVICES || []).filter(function (d) { return d.group === g; }).forEach(function (d) {
+        og.appendChild(new Option(d.name + ' · ' + d.w + '×' + d.h, d.id));
+      });
+      pane.emuSelect.appendChild(og);
+    });
+    pane.emuSelect.addEventListener('change', function () { setEmu(role, pane.emuSelect.value); });
+    pane.foldBtn.addEventListener('click', function () { foldTo(role, EMU[pane.emu].pair); });
+  });
+
+  document.querySelectorAll('#devicePresets [data-l]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      panes.live.emu = b.dataset.l;
+      panes.staging.emu = b.dataset.r;
+      if (!deviceMode) { setDeviceMode(true); return; }
+      ROLES.forEach(function (r) { if (panes[r].origin) load(r, panes[r].path); });
+      updateDeviceControls();
+      layoutViewports();
+      syncQuery();
+    });
+  });
+
+  function updateDeviceControls() {
+    ROLES.forEach(function (role) {
+      var pane = panes[role], d = EMU[pane.emu];
+      pane.emuSelect.value = pane.emu;
+      pane.emuSelect.disabled = !!pane.figmaSource;
+      pane.emuSelect.title = pane.figmaSource ? 'A Figma design keeps its own frame size' : 'Device';
+      pane.foldBtn.hidden = !(d && d.pair) || !!pane.figmaSource;
+      if (d && d.pair) pane.foldBtn.textContent = d.folded ? 'Unfold' : 'Fold';
+    });
+    document.querySelectorAll('#devicePresets [data-l]').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.l === panes.live.emu && b.dataset.r === panes.staging.emu);
+    });
+  }
+
+  /** Fold or unfold with a book-like swing of the right half (instant with reduced motion). */
+  function foldTo(role, id) {
+    var pane = panes[role], from = EMU[pane.emu], to = EMU[id];
+    if (!from || !to || pane.folding) return;
+    var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !pane.viewport.animate) { setEmu(role, id); return; }
+    pane.folding = true;
+    var done = function () { pane.folding = false; };
+    if (from.folded) {
+      setEmu(role, id); // lay out unfolded, then swing the cover open over it
+      swing(pane, to, true).then(done, done);
+    } else {
+      swing(pane, from, false).then(function () { setEmu(role, id); }).then(done, done);
+    }
+  }
+
+  function swing(pane, d, opening) {
+    var b = d.bezel, chin = d.chin || 0;
+    var fw = d.w + 2 * b, fh = d.h + 2 * b + 2 * chin;
+    var flap = document.createElement('div');
+    flap.className = 'dev-flap';
+    var r = (d.radius + b) + 'px';
+    Object.assign(flap.style, {
+      position: 'absolute', left: fw / 2 + 'px', top: '0px', width: fw / 2 + 'px', height: fh + 'px', zIndex: 5,
+      transformOrigin: '0 50%', transformStyle: 'preserve-3d',
+    });
+    // Two faces: the inner screen (seen when open) and the phone's back (seen when shut).
+    var face = function (bg, flip) {
+      var el = document.createElement('div');
+      Object.assign(el.style, {
+        position: 'absolute', inset: '0', backfaceVisibility: 'hidden', borderRadius: flip ? r + ' 0 0 ' + r : '0 ' + r + ' ' + r + ' 0',
+        background: bg, transform: flip ? 'rotateY(180deg)' : '', boxShadow: '0 0 0 ' + b + 'px #0d0d10 inset',
+      });
+      return el;
+    };
+    flap.appendChild(face('linear-gradient(90deg, #d9dbe3, #f4f5f8 35%, #ffffff)', false));
+    flap.appendChild(face('linear-gradient(90deg, #0d0d10, #1d1d22 60%, #34343c)', true));
+    pane.viewport.appendChild(flap);
+    var shut = 'perspective(2200px) rotateY(-180deg)', open = 'perspective(2200px) rotateY(0deg)';
+    var anim = flap.animate(opening ? [{ transform: shut }, { transform: open }] : [{ transform: open }, { transform: shut }],
+      { duration: 700, easing: 'cubic-bezier(.65,0,.35,1)', fill: 'forwards' });
+    return anim.finished.then(function () {
+      if (!opening) { flap.remove(); return; }
+      return flap.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, fill: 'forwards' }).finished
+        .then(function () { flap.remove(); });
+    });
+  }
+
+  function statusBar(d) {
+    var size = d.kind.indexOf('android') === 0 ? 13 : d.kind === 'ipad' ? 12 : 15;
+    return '<span style="font-size:' + size + 'px">9:41</span><span class="icons"><span class="dev-sig"><b style="height:4px"></b><b style="height:6px"></b><b style="height:8px"></b><b style="height:11px"></b></span><span class="dev-bat"></span></span>';
+  }
+
+  function hostLabel(role) {
+    try { return new URL(panes[role].origin).host; } catch (e) { return ''; }
+  }
+
+  /** Draw the frame around the iframe (called from layoutViewports). */
+  function drawDevice(role, d) {
+    var pane = panes[role], v = pane.viewport;
+    var b = d.bezel, chin = d.chin || 0;
+    var sx = b, sy = b + chin; // screen origin inside the frame
+    var pageTop = sy + d.status + d.top;
+    var pageH = d.h - d.status - d.top - d.bottom;
+    var key = d.id + '|' + hostLabel(role);
+    if (pane.drawn !== key) {
+      pane.drawn = key;
+      var host = hostLabel(role);
+      var back = '<div class="dev-screen-bg" style="left:' + sx + 'px;top:' + sy + 'px;width:' + d.w + 'px;height:' + d.h + 'px;border-radius:' + d.radius + 'px"></div>' +
+        '<div class="dev-status" style="left:' + sx + 'px;top:' + sy + 'px;width:' + d.w + 'px;height:' + d.status + 'px;padding:0 ' + (d.kind === 'ios' ? 32 : 18) + 'px;border-radius:' + d.radius + 'px ' + d.radius + 'px 0 0">' + statusBar(d) + '</div>';
+      if (d.kind === 'ios') back += '<span class="dev-island" style="top:' + (sy + 11) + 'px"></span>';
+      if (d.kind === 'android' && !d.hinge) back += '<span class="dev-hole" style="top:' + (sy + 9) + 'px"></span>';
+      if (d.top) {
+        var cls = d.kind === 'ipad' ? 'ipad' : 'android';
+        var inner = cls === 'ipad' ? '<span>‹ ›</span><span class="pill">' + host + '</span><span>⇧</span>' : '<span class="pill">🔒 ' + host + '</span><span>⋮</span>';
+        back += '<div class="dev-bar ' + cls + '" style="left:' + sx + 'px;top:' + (sy + d.status) + 'px;width:' + d.w + 'px;height:' + d.top + 'px">' + inner + '</div>';
+      }
+      if (d.bottom && d.kind.indexOf('ios') === 0) {
+        back += '<div class="dev-bar ios" style="left:' + sx + 'px;top:' + (sy + d.h - d.bottom) + 'px;width:' + d.w + 'px;height:' + d.bottom + 'px;border-radius:0 0 ' + d.radius + 'px ' + d.radius + 'px"><span class="pill">AA&nbsp; ' + host + '</span></div>';
+        if (d.kind !== 'ios-home') back += '<span class="dev-home" style="top:' + (sy + d.h - 13) + 'px"></span>';
+      }
+      if (d.bottom && d.kind === 'android') {
+        back += '<div class="dev-gesture" style="left:' + sx + 'px;top:' + (sy + d.h - d.bottom) + 'px;width:' + d.w + 'px;height:' + d.bottom + 'px;border-radius:0 0 ' + d.radius + 'px ' + d.radius + 'px"><i></i></div>';
+      }
+      if (chin) back += '<span class="dev-homebtn" style="top:' + (sy + d.h + (chin - 54) / 2) + 'px"></span>';
+      var front = '';
+      if (d.crease) front += '<span class="dev-crease" style="left:' + (sx + d.w / 2 - 1) + 'px;top:' + sy + 'px;height:' + d.h + 'px"></span>';
+      if (d.hinge) front += '<span class="dev-hinge" style="left:' + (sx + (d.w - d.hinge) / 2) + 'px;top:' + (sy - b) + 'px;width:' + d.hinge + 'px;height:' + (d.h + 2 * b) + 'px"></span>';
+      if (!pane.decorBack) {
+        pane.decorBack = document.createElement('div');
+        pane.decorBack.className = 'dev-decor';
+        pane.decorFront = document.createElement('div');
+        pane.decorFront.className = 'dev-decor';
+        pane.devCaption = document.createElement('div');
+        pane.devCaption.className = 'dev-caption';
+      }
+      pane.decorBack.innerHTML = back;
+      pane.decorFront.innerHTML = front;
+      v.insertBefore(pane.decorBack, pane.iframe);
+      v.appendChild(pane.decorFront);
+      pane.host.appendChild(pane.devCaption);
+      pane.devCaption.textContent = d.name + ' · ' + d.w + ' × ' + d.h + (d.note ? ' (' + d.note + ')' : '');
+    }
+    v.classList.add('device');
+    v.style.borderRadius = (d.radius + b) + 'px';
+    Object.assign(pane.iframe.style, { left: sx + 'px', top: pageTop + 'px', width: d.w + 'px', height: pageH + 'px' });
+    // Surface Duo spanned: the hinge hides a strip of the page, as on the device.
+    return { fw: d.w + 2 * b, fh: d.h + 2 * b + 2 * chin, sx: sx, pageTop: pageTop, pageH: pageH };
+  }
+
+  function clearDevice(role) {
+    var pane = panes[role];
+    if (!pane.drawn) return;
+    pane.drawn = null;
+    pane.viewport.classList.remove('device');
+    pane.viewport.style.borderRadius = '';
+    ['left', 'top', 'width', 'height'].forEach(function (k) { pane.iframe.style[k] = ''; });
+    [pane.decorBack, pane.decorFront, pane.devCaption].forEach(function (el) { if (el && el.parentNode) el.parentNode.removeChild(el); });
   }
 
   function fullUrl(role) {
@@ -271,6 +482,8 @@
       panes[r].iframe.removeAttribute('src');
       updateLabel(r);
     });
+    updateDeviceControls();
+    layoutViewports();
     syncQuery();
     if (dr && !panes[dr].figma) openPicker(dr, true);
   }
@@ -328,6 +541,12 @@
 
       case 'escape':
         emit('escape', role);
+        break;
+
+      case 'swipe':
+        if (role === leader && els.syncClicks.checked && !designRole()) {
+          send(other(role), { type: 'swipe', ref: msg.ref, start: msg.start, size: msg.size, path: msg.path });
+        }
         break;
 
       case 'clickMissed':
@@ -393,6 +612,19 @@
       var w = pane.host.clientWidth;
       var h = pane.host.clientHeight;
       if (!w || !h) return;
+      var d = emuFor(role);
+      if (d) {
+        var f = drawDevice(role, d);
+        var s = Math.min(1, (w - 24) / f.fw, (h - 44) / f.fh);
+        var left = (w - f.fw * s) / 2, top = Math.max(8, (h - 24 - f.fh * s) / 2);
+        Object.assign(pane.viewport.style, { width: f.fw + 'px', height: f.fh + 'px', transform: 'scale(' + s + ')', left: left + 'px', top: top + 'px' });
+        pane.devCaption.style.top = (top + f.fh * s + 6) + 'px';
+        var x0 = left + f.sx * s, y0 = top + f.pageTop * s;
+        pane.geom = { left: x0, top: y0, scale: s, clip: { x: x0, y: y0, w: d.w * s, h: f.pageH * s } };
+        return;
+      }
+      clearDevice(role);
+      pane.viewport.style.top = '0px';
       var width = vp === 'fit' ? w : Number(vp);
       var scale = Math.min(1, w / width);
       pane.viewport.style.width = width + 'px';
@@ -401,7 +633,7 @@
       // Center narrow (mobile/tablet) viewports in the pane.
       var left = scale === 1 ? Math.max(0, (w - width) / 2) : 0;
       pane.viewport.style.left = left + 'px';
-      pane.geom = { left: left, scale: scale };
+      pane.geom = { left: left, top: 0, scale: scale, clip: null };
     });
     emit('layout');
   }
@@ -491,6 +723,11 @@
     if (els.layout.value !== 'split') q.set('layout', els.layout.value);
     if (els.scrollMode.value !== 'px') q.set('mode', els.scrollMode.value);
     if (view !== 'both') q.set('view', view);
+    if (deviceMode) {
+      q.set('dev', '1');
+      q.set('ldev', panes.live.emu);
+      q.set('sdev', panes.staging.emu);
+    }
     var qs = q.toString();
     history.replaceState(null, '', qs ? '?' + qs : location.pathname);
   }
@@ -602,8 +839,13 @@
       }
     }
     setSelect(els.viewport, q.get('vp') || store.get('vp'));
+    ROLES.forEach(function (r) {
+      var id = q.get(r === 'live' ? 'ldev' : 'sdev') || store.get('emu-' + r);
+      if (id && EMU[id]) panes[r].emu = id;
+    });
     setSelect(els.layout, q.get('layout') || store.get('layout'));
     setSelect(els.scrollMode, q.get('mode') || store.get('mode'));
+    if (q.get('dev') === '1') setDeviceMode(true, true); else updateDeviceControls();
     setView(q.get('view') || store.get('view'), true);
 
     // The page itself is static; the proxy checks the team password.

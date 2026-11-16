@@ -85,11 +85,11 @@
   // --- coordinates: layer (screen) <-> page ------------------------------
   function toPage(role, lx, ly) {
     var p = window.SBS.pane(role);
-    return { x: (lx - p.geom.left) / p.geom.scale + p.scroll.x, y: ly / p.geom.scale + p.scroll.y };
+    return { x: (lx - p.geom.left) / p.geom.scale + p.scroll.x, y: (ly - (p.geom.top || 0)) / p.geom.scale + p.scroll.y };
   }
   function toLayer(role, px, py) {
     var p = window.SBS.pane(role);
-    return { x: p.geom.left + (px - p.scroll.x) * p.geom.scale, y: (py - p.scroll.y) * p.geom.scale };
+    return { x: p.geom.left + (px - p.scroll.x) * p.geom.scale, y: (p.geom.top || 0) + (py - p.scroll.y) * p.geom.scale };
   }
   function localPoint(layer, e) {
     var r = layer.getBoundingClientRect();
@@ -120,7 +120,17 @@
   ['sbs:scroll', 'sbs:nav'].forEach(function (ev) {
     window.addEventListener(ev, function (e) { renderAll(e.detail.role); });
   });
-  window.addEventListener('sbs:layout', function () { renderAll(); });
+  window.addEventListener('sbs:layout', function () {
+    // On an emulated device, keep annotations inside the phone's screen.
+    ROLES.forEach(function (role) {
+      var g = window.SBS.pane(role).geom, layer = layers[role];
+      var c = g && g.clip;
+      layer.style.clipPath = c
+        ? 'inset(' + c.y + 'px ' + Math.max(0, layer.clientWidth - c.x - c.w) + 'px ' + Math.max(0, layer.clientHeight - c.y - c.h) + 'px ' + c.x + 'px)'
+        : '';
+    });
+    renderAll();
+  });
 
   // --- creating annotations ---------------------------------------------
   function addItem(role, kind, page, size, opts) {

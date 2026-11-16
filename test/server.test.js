@@ -18,8 +18,8 @@ test('site encoding round-trips', () => {
     site: 'www.site.com', origin: 'https://www.site.com', prefix: '/x/www.site.com', rest: '/a/b', device: null,
   });
   // an emulated device rides along in the site segment
-  assert.deepEqual(parseProxyPath('/x/app.site.com@iphone-16/login'), {
-    site: 'app.site.com@iphone-16', origin: 'https://app.site.com', prefix: '/x/app.site.com@iphone-16', rest: '/login', device: 'iphone-16',
+  assert.deepEqual(parseProxyPath('/x/app.site.com@iphone-15/login'), {
+    site: 'app.site.com@iphone-15', origin: 'https://app.site.com', prefix: '/x/app.site.com@iphone-15', rest: '/login', device: 'iphone-15',
   });
   assert.equal(parseProxyPath('/x/app.site.com@unknown-phone/login'), null, 'unknown devices are rejected');
   assert.equal(parseProxyPath('/x/www.site.com').rest, '/');

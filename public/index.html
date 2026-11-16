@@ -38,7 +38,7 @@
         </select>
       </label>
       <label class="toggle"><input id="syncNav" type="checkbox" checked> Sync navigation</label>
-      <label class="toggle" title="Mirror accordion, tab and toggle clicks to the other side. Links, form fields and submit buttons are never mirrored."><input id="syncClicks" type="checkbox" checked> Sync clicks</label>
+      <label class="toggle" title="Mirror accordion, tab and toggle clicks to the other side. Links, form fields and submit buttons are never mirrored."><input id="syncClicks" type="checkbox" checked> Sync clicks &amp; swipes</label>
       <button id="align" type="button" title="Move staging to the live pane's scroll position">Align</button>
 
       <span class="sep"></span>
@@ -47,6 +47,14 @@
         <button type="button" data-view="both" class="active" title="Show live and staging">Both</button>
         <button type="button" data-view="live" title="Show only the live site, full width">Live only</button>
         <button type="button" data-view="staging" title="Show only staging, full width">Staging only</button>
+      </span>
+
+      <button id="deviceBtn" type="button" aria-pressed="false" title="Show each side on an emulated phone or tablet">📱 Switch to device</button>
+      <span class="presets device-only" id="devicePresets" role="group" aria-label="Device pairs">
+        <button type="button" data-l="pixel-9" data-r="iphone-15">Android vs iPhone</button>
+        <button type="button" data-l="iphone-se-2022" data-r="iphone-15-pro-max">Small vs large iPhone</button>
+        <button type="button" data-l="iphone-duo-folded" data-r="iphone-duo-unfolded">iPhone Duo folded vs unfolded</button>
+        <button type="button" data-l="galaxy-tab-s9" data-r="ipad-pro-11">Tablets</button>
       </span>
 
       <span id="designControls" class="design-controls" hidden>
@@ -100,6 +108,8 @@
       <div class="pane-bar">
         <span class="tag live">Live</span>
         <span class="pane-url" data-url>—</span>
+        <select data-device-select class="device-only" aria-label="Device"></select>
+        <button type="button" data-fold class="device-only" hidden title="Fold or unfold this device">Unfold</button>
         <button type="button" data-solo title="Full view">⤢</button>
         <button type="button" data-reload title="Reload">↻</button>
         <a data-open target="_blank" rel="noopener" title="Open the real page in a new tab">↗</a>
@@ -111,6 +121,8 @@
       <div class="pane-bar">
         <span class="tag staging">Staging</span>
         <span class="pane-url" data-url>—</span>
+        <select data-device-select class="device-only" aria-label="Device"></select>
+        <button type="button" data-fold class="device-only" hidden title="Fold or unfold this device">Unfold</button>
         <button type="button" data-solo title="Full view">⤢</button>
         <button type="button" data-reload title="Reload">↻</button>
         <a data-open target="_blank" rel="noopener" title="Open the real page in a new tab">↗</a>
@@ -176,6 +188,7 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/__sbs/ui/devices.js"></script>
   <script src="/__sbs/ui/app.js"></script>
   <script src="/__sbs/ui/annotate.js"></script>
   <script src="/__sbs/ui/picker.js"></script>
