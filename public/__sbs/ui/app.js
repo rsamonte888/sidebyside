@@ -517,7 +517,7 @@
 
       case 'click':
         if (role === leader && els.syncClicks.checked && !designRole()) {
-          send(other(role), { type: 'click', tag: msg.tag, text: msg.text, index: msg.index, path: msg.path });
+          send(other(role), { type: 'click', tag: msg.tag, text: msg.text, index: msg.index, path: msg.path, key: msg.key, touch: msg.touch });
         }
         break;
 

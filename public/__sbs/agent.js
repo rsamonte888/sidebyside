@@ -110,8 +110,18 @@
       var d = drag;
       drag = null;
       document.documentElement.style.userSelect = '';
-      fireTouch('touchend', d.target, e.clientX, e.clientY, d.id, true);
+      var end = fireTouch('touchend', d.target, e.clientX, e.clientY, d.id, true);
       if (!d.moved) {
+        if (end.defaultPrevented) {
+          // The page handled the tap by touch and cancelled the click, as on a
+          // real phone: drop the click, but still mirror the tap.
+          swallow(e);
+          var cancel = function (ev) { ev.stopImmediatePropagation(); ev.preventDefault(); };
+          window.addEventListener('click', cancel, true);
+          setTimeout(function () { window.removeEventListener('click', cancel, true); }, 0);
+          if (window.__sbsDescribeTap) window.__sbsDescribeTap(d.target);
+          return;
+        }
         // A tap: let the page see the press it missed, then the normal click follows.
         try {
           d.target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: d.x0, clientY: d.y0, button: 0, buttons: 1, view: window }));
@@ -135,6 +145,20 @@
       }
     }, true);
     document.addEventListener('dragstart', function (e) { if (drag) e.preventDefault(); }, true);
+
+    // Replaying a tap from the other pane: the same sequence a phone sends.
+    window.__sbsTap = function (el) {
+      var r = el.getBoundingClientRect();
+      var x = r.left + r.width / 2, y = r.top + r.height / 2, id = touchId++;
+      fireTouch('touchstart', el, x, y, id);
+      if (fireTouch('touchend', el, x, y, id, true).defaultPrevented) return; // handled by touch
+      var opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, view: window };
+      try {
+        el.dispatchEvent(new MouseEvent('mousedown', Object.assign({ buttons: 1 }, opts)));
+        el.dispatchEvent(new MouseEvent('mouseup', opts));
+      } catch (e) { /* ignore */ }
+      el.click();
+    };
 
     // Replaying a swipe from the other pane on the matching element.
     window.__sbsReplaySwipe = function (msg) {
@@ -469,8 +493,18 @@
 
   function norm(el) { return (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160); }
 
-  function clickable(t) {
+  // Checkbox/radio menu toggles (the "hidden checkbox + label" pattern) are
+  // UI, not form input, as long as they aren't part of a form.
+  function uiToggleInput(el) {
+    var input = el.tagName === 'LABEL' ? el.control : el;
+    return !!input && input.tagName === 'INPUT' && /^(checkbox|radio)$/i.test(input.type) && !input.form;
+  }
+
+  function clickable(t, allowLinks) {
     if (!t || !t.closest) return null;
+    var lab = t.closest('label');
+    if (lab) return uiToggleInput(lab) ? lab : null;
+    if (t.matches('input')) return uiToggleInput(t) ? t : null;
     var el = t.closest(TOGGLE);
     if (!el) {
       // Plain elements with a click handler usually show a pointer cursor.
@@ -478,10 +512,10 @@
         if (getComputedStyle(n).cursor === 'pointer') { el = n; break; }
       }
     }
+    var link = t.closest('a[href]');
+    if (link && !/^(#|javascript:)/i.test(link.getAttribute('href'))) return allowLinks ? link : null;
     if (!el) return null;
-    var link = el.closest('a[href]');
-    if (link && !/^(#|javascript:)/i.test(link.getAttribute('href'))) return null;
-    if (el.matches('input,select,textarea,option,label') || el.closest('label')) return null;
+    if (el.matches('select,textarea,option')) return null;
     if (el.tagName === 'BUTTON' && (el.type === 'submit' && el.form)) return null;
     return el;
   }
@@ -490,15 +524,65 @@
     return Array.prototype.filter.call(document.getElementsByTagName(tag), function (e) { return norm(e) === text; });
   }
 
-  document.addEventListener('click', function (e) {
-    if (!e.isTrusted) return; // ignore clicks we replayed ourselves
-    var el = clickable(e.target);
-    if (!el) return;
+  // Attributes that identify icon-only controls (hamburgers, close buttons).
+  var KEY_ATTRS = ['id', 'data-testid', 'aria-controls', 'aria-label', 'title', 'name', 'for'];
+  function keyOf(el) {
+    var k = {};
+    KEY_ATTRS.forEach(function (a) { var v = el.getAttribute(a); if (v) k[a] = v; });
+    return k;
+  }
+  function findByKey(tag, key) {
+    for (var i = 0; key && i < KEY_ATTRS.length; i++) {
+      var a = KEY_ATTRS[i];
+      if (!key[a]) continue;
+      var found = document.querySelector(tag + '[' + a + '="' + CSS.escape(key[a]) + '"]');
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function describe(el) {
     var text = norm(el);
     var tag = el.tagName.toLowerCase();
     var index = text.length >= 2 ? sameText(tag, text).indexOf(el) : -1;
-    post({ type: 'click', tag: tag, text: text, index: index, path: cssPath(el) });
+    return { type: 'click', tag: tag, text: text, index: index, path: cssPath(el), key: keyOf(el) };
+  }
+
+  var labelControl = null; // a label click makes the browser click its checkbox too
+  document.addEventListener('click', function (e) {
+    if (!e.isTrusted) return; // ignore clicks we replayed ourselves
+    var el = clickable(e.target, false);
+    if (el && el === labelControl) { labelControl = null; return; }
+    if (el && el.tagName === 'LABEL') {
+      labelControl = el.control;
+      setTimeout(function () { labelControl = null; }, 0);
+    }
+    if (el) { post(describe(el)); return; }
+    // A link that opens a submenu instead of navigating: mirror it only if the
+    // page cancelled the navigation and stayed on the same page.
+    var link = clickable(e.target, true);
+    if (!link) return;
+    var before = location.href;
+    setTimeout(function () {
+      if (e.defaultPrevented && location.href === before) post(describe(link));
+    }, 150);
   }, true);
+
+  // Not form fields or links: safe to tap on the other side.
+  function tappable(t) {
+    if (!t || !t.closest || t.closest('a[href], form, input, select, textarea, option, label, [contenteditable]')) return null;
+    return t;
+  }
+
+  // Used by device mode, where a tap the page handled by touch never clicks.
+  // The page handling it is proof it's a control, even if it doesn't look like one.
+  window.__sbsDescribeTap = function (t) {
+    var el = clickable(t, false) || clickable(t, true) || tappable(t);
+    if (!el) return;
+    var msg = describe(el);
+    msg.touch = true;
+    post(msg);
+  };
 
   function replayClick(msg) {
     var el = null;
@@ -506,11 +590,13 @@
       var matches = sameText(msg.tag, msg.text);
       if (matches.length) el = matches[Math.min(msg.index, matches.length - 1)];
     }
+    if (!el && msg.key) el = findByKey(msg.tag, msg.key);
     if (!el && msg.path) {
       try { el = document.querySelector(msg.path); } catch (e) { el = null; }
     }
-    if (el && clickable(el)) el.click();
-    else post({ type: 'clickMissed', text: msg.text });
+    if (!el || !(clickable(el, true) || (msg.touch && tappable(el)))) { post({ type: 'clickMissed', text: msg.text }); return; }
+    // On an emulated phone, tap like a finger would; otherwise click.
+    if (window.__sbsTap) window.__sbsTap(el); else el.click();
   }
 
   window.addEventListener('message', function (e) {
