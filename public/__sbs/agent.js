@@ -23,6 +23,16 @@
   try { DEV = JSON.parse((document.currentScript && document.currentScript.getAttribute('data-device')) || 'null'); } catch (e) { DEV = null; }
   if (DEV) setupDevice(DEV);
 
+  // el.click() doesn't exist on SVG elements (icon-only buttons are often an <svg>).
+  function clickEl(el, x, y) {
+    if (typeof el.click === 'function') { el.click(); return; }
+    var r = el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent('click', {
+      bubbles: true, cancelable: true, composed: true, view: window, button: 0,
+      clientX: x != null ? x : r.left + r.width / 2, clientY: y != null ? y : r.top + r.height / 2,
+    }));
+  }
+
   function setupDevice(D) {
     var apple = D.os === 'ios' || D.os === 'ipados';
     var def = function (obj, prop, get) {
@@ -45,6 +55,10 @@
     def(screen, 'width', function () { return window.innerWidth; });
     def(screen, 'availWidth', function () { return window.innerWidth; });
     if (!('ontouchstart' in window)) { try { window.ontouchstart = null; } catch (e) { /* ignore */ } }
+    // Phones don't show a desktop scrollbar.
+    var noBars = document.createElement('style');
+    noBars.textContent = '*{scrollbar-width:none!important}*::-webkit-scrollbar{display:none!important}';
+    (document.head || document.documentElement).appendChild(noBars);
     // JS media checks for touch screens (CSS @media rules can't be changed).
     var mm = window.matchMedia && window.matchMedia.bind(window);
     if (mm) {
@@ -157,7 +171,7 @@
         el.dispatchEvent(new MouseEvent('mousedown', Object.assign({ buttons: 1 }, opts)));
         el.dispatchEvent(new MouseEvent('mouseup', opts));
       } catch (e) { /* ignore */ }
-      el.click();
+      clickEl(el, x, y);
     };
 
     // Replaying a swipe from the other pane on the matching element.
@@ -596,7 +610,7 @@
     }
     if (!el || !(clickable(el, true) || (msg.touch && tappable(el)))) { post({ type: 'clickMissed', text: msg.text }); return; }
     // On an emulated phone, tap like a finger would; otherwise click.
-    if (window.__sbsTap) window.__sbsTap(el); else el.click();
+    if (window.__sbsTap) window.__sbsTap(el); else clickEl(el);
   }
 
   window.addEventListener('message', function (e) {
