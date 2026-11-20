@@ -93,7 +93,7 @@
     var drag = null, touchId = 1;
     var swallow = function (e) { if (e.isTrusted) e.stopImmediatePropagation(); };
     window.addEventListener('mousedown', function (e) {
-      if (e.button !== 0 || !e.isTrusted) return;
+      if (e.button !== 0 || !e.isTrusted || window.__sbsFreestyle) return;
       var t = e.target;
       // Typing and selecting in form fields stays mouse-driven.
       if (t.closest && t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;

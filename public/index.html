@@ -97,6 +97,7 @@
       </span>
 
       <span class="spacer"></span>
+      <button id="freestyleBtn" type="button" aria-pressed="false" title="Edit a copy of the page: move, delete and add elements to mock up changes">✏️ Freestyle</button>
       <button id="annotateBtn" type="button" title="Add callouts and take a screenshot for a ticket">Annotate</button>
       <button id="share" type="button" title="Copy a link to this comparison">Copy link</button>
     </div>
@@ -141,6 +142,35 @@
       </ul>
     </div>
   </main>
+
+  <aside id="fsPanel" class="notes-panel fs-panel" hidden aria-label="Freestyle">
+    <div class="np-head">
+      <b>✏️ Freestyle</b>
+      <button id="fsClose" type="button" title="Leave Freestyle">×</button>
+    </div>
+    <p class="np-hint">Click anything on the page to select it. Drag <b>⠿</b> to move it, or use <b>↑ ↓</b>. Double-click text to edit it. This is a mockup on a copy of the page; the real site doesn't change.</p>
+    <div class="fs-sel" id="fsSel" aria-live="polite">Nothing selected</div>
+    <div class="fs-group">
+      <span class="fs-label">Add after the selection</span>
+      <input id="fsText" type="text" value="Book a visit" aria-label="Text for the new button or text">
+      <div class="fs-add">
+        <button type="button" data-add="button">Button</button>
+        <button type="button" data-add="text">Text</button>
+        <button type="button" data-add="image">Image</button>
+        <button type="button" data-add="spacer">Spacer</button>
+      </div>
+    </div>
+    <div class="fs-row">
+      <button type="button" id="fsUndo" title="Undo (Ctrl+Z)">↶ Undo</button>
+      <button type="button" id="fsRedo" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+      <button type="button" id="fsReset">Reset</button>
+    </div>
+    <label class="toggle fs-orig"><input type="checkbox" id="fsOriginal"> Show the original next to it</label>
+    <div class="fs-count" id="fsCount">No changes yet</div>
+    <button type="button" id="fsShot" class="primary">Take screenshot</button>
+    <button type="button" id="fsLink">Copy link to this mockup</button>
+    <p class="np-foot">The page is frozen while you edit, so menus and accordions don't open. Leaving Freestyle discards the edits unless you copied the link.</p>
+  </aside>
 
   <aside id="notesPanel" class="notes-panel" hidden>
     <div class="np-head">
@@ -192,5 +222,6 @@
   <script src="/__sbs/ui/app.js"></script>
   <script src="/__sbs/ui/annotate.js"></script>
   <script src="/__sbs/ui/picker.js"></script>
+  <script src="/__sbs/ui/freestyle.js"></script>
 </body>
 </html>

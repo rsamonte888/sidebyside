@@ -473,6 +473,7 @@
       .then(function () {
         closeMenus();
         document.body.classList.add('capturing');
+        window.dispatchEvent(new Event('sbs:capture-start'));
         if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
         return frames(2).then(function () { return wait(200); });
       })
@@ -490,7 +491,10 @@
         frame.getContext('2d').drawImage(video, 0, 0);
         return { frame: frame, ratio: ratio };
       })
-      .finally(function () { document.body.classList.remove('capturing'); });
+      .finally(function () {
+        document.body.classList.remove('capturing');
+        window.dispatchEvent(new Event('sbs:capture-end'));
+      });
   }
 
   function toFrame(r, ratio) {

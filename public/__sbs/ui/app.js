@@ -764,13 +764,63 @@
   function shareUrl() {
     syncQuery();
     var base = location.href;
+    var add = function (url, key, enc) { return url + (url.indexOf('?') >= 0 ? '&' : '?') + key + '=' + enc; };
     var ann = window.SBS.annotations && window.SBS.annotations.save();
-    if (!ann) return Promise.resolve(base);
-    ann.sc = {};
-    ROLES.forEach(function (r) { ann.sc[r] = [Math.round(panes[r].scroll.x), Math.round(panes[r].scroll.y)]; });
-    return encodeState(ann).then(function (enc) {
-      return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'ann=' + enc;
-    });
+    var fs = window.SBS.freestyle && window.SBS.freestyle.save();
+    var p = Promise.resolve(base);
+    if (ann) {
+      ann.sc = {};
+      ROLES.forEach(function (r) { ann.sc[r] = [Math.round(panes[r].scroll.x), Math.round(panes[r].scroll.y)]; });
+      p = p.then(function (url) { return encodeState(ann).then(function (enc) { return add(url, 'ann', enc); }); });
+    }
+    if (fs) p = p.then(function (url) { return encodeState(fs).then(function (enc) { return add(url, 'fs', enc); }); });
+    return p;
+  }
+
+  // --- Freestyle layout ------------------------------------------------------
+  // Freestyle edits the live pane. The staging pane is set aside (and can show
+  // the original page next to the edited one); everything is put back on exit.
+  var fsSaved = null;
+  function freestyleLayout(on, showOriginal) {
+    if (on) {
+      if (!fsSaved) {
+        fsSaved = {
+          view: view, single: single, syncClicks: els.syncClicks.checked, syncNav: els.syncNav.checked,
+          staging: { origin: panes.staging.origin, figma: panes.staging.figmaSource, path: panes.staging.path, src: panes.staging.iframe.getAttribute('src') },
+        };
+        // The edited page is a frozen copy: nothing there to sync clicks or navigation with.
+        els.syncClicks.checked = false;
+        els.syncNav.checked = false;
+      }
+      if (showOriginal) {
+        setSingle(null);
+        setKind('staging', null);
+        panes.staging.origin = panes.live.origin;
+        load('staging', panes.live.path);
+        setView('both');
+        panes.staging.el.querySelector('.pane-bar .tag').textContent = 'Original';
+      } else {
+        if (fsSaved.single === 'live') setSingle('live');
+        setView('live');
+      }
+    } else if (fsSaved) {
+      var s = fsSaved;
+      fsSaved = null;
+      els.syncClicks.checked = s.syncClicks;
+      els.syncNav.checked = s.syncNav;
+      setKind('staging', s.staging.figma);
+      panes.staging.origin = s.staging.origin;
+      if (s.staging.origin || s.staging.figma) load('staging', s.staging.path);
+      else panes.staging.iframe.removeAttribute('src');
+      setSingle(s.single);
+      setView(s.view);
+      load('live', panes.live.path); // back to the real, interactive page
+    }
+    if (on) panes.live.el.querySelector('.pane-bar .tag').textContent = 'Freestyle';
+    else setKind('live', panes.live.figmaSource); // puts the normal label back
+    updateDeviceControls();
+    layoutViewports();
+    syncQuery();
   }
 
   // Restoring scroll from a link: pages may still be loading content, so retry.
@@ -857,6 +907,11 @@
           return;
         }
         if (q.get('live') || q.get('staging')) compare();
+        if (q.get('fs')) {
+          decodeState(q.get('fs')).then(function (data) {
+            if (window.SBS.freestyle) window.SBS.freestyle.open(data);
+          }).catch(function () { toast('Couldn’t read the Freestyle edits in this link'); });
+        }
         if (q.get('ann')) {
           decodeState(q.get('ann')).then(function (data) {
             restore = data.sc || null;
@@ -889,6 +944,15 @@
     },
     shareUrl: function () { return shareUrl(); },
     viewport: function () { return els.viewport.value; },
+    freestyleLayout: freestyleLayout,
+    liveOrigin: function () { return panes.live.origin; },
+    ensureLive: function () {
+      // Freestyle needs a site in the live pane: use staging's, or the main site.
+      if (panes.live.origin && !panes.live.figmaSource) return true;
+      els.liveUrl.value = els.stagingUrl.value && !isFigma(els.stagingUrl.value) ? els.stagingUrl.value : 'https://bywinona.com';
+      compare();
+      return !!panes.live.origin;
+    },
     scrollBy: function (role, dx, dy) {
       setLeader(role); // so the other side follows
       send(role, { type: 'scrollBy', dx: dx, dy: dy });
