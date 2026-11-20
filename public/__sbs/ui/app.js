@@ -781,18 +781,32 @@
   // Freestyle edits the live pane. The staging pane is set aside (and can show
   // the original page next to the edited one); everything is put back on exit.
   var fsSaved = null;
-  function freestyleLayout(on, showOriginal) {
+  // artboard: the staging pane becomes a blank artboard (the live pane is the
+  // library that blocks are dragged from).
+  function freestyleLayout(on, showOriginal, artboard) {
     if (on) {
       if (!fsSaved) {
         fsSaved = {
-          view: view, single: single, syncClicks: els.syncClicks.checked, syncNav: els.syncNav.checked,
+          view: view, single: single, syncClicks: els.syncClicks.checked, syncNav: els.syncNav.checked, syncScroll: els.syncScroll.checked,
           staging: { origin: panes.staging.origin, figma: panes.staging.figmaSource, path: panes.staging.path, src: panes.staging.iframe.getAttribute('src') },
         };
         // The edited page is a frozen copy: nothing there to sync clicks or navigation with.
         els.syncClicks.checked = false;
         els.syncNav.checked = false;
       }
-      if (showOriginal) {
+      els.syncScroll.checked = !artboard && fsSaved.syncScroll;
+      if (artboard) {
+        setSingle(null);
+        setKind('staging', null);
+        panes.staging.origin = null;
+        panes.staging.path = '/';
+        if (panes.staging.iframe.getAttribute('src') !== '/__sbs/ui/canvas.html') panes.staging.iframe.src = '/__sbs/ui/canvas.html';
+        setView('both');
+        panes.staging.el.querySelector('.pane-bar .tag').textContent = 'Artboard';
+        panes.staging.urlLabel.textContent = 'Blank artboard: drag blocks here';
+        panes.staging.urlLabel.title = '';
+        panes.staging.openLink.removeAttribute('href');
+      } else if (showOriginal) {
         setSingle(null);
         setKind('staging', null);
         panes.staging.origin = panes.live.origin;
@@ -808,6 +822,7 @@
       fsSaved = null;
       els.syncClicks.checked = s.syncClicks;
       els.syncNav.checked = s.syncNav;
+      els.syncScroll.checked = s.syncScroll;
       setKind('staging', s.staging.figma);
       panes.staging.origin = s.staging.origin;
       if (s.staging.origin || s.staging.figma) load('staging', s.staging.path);
@@ -816,7 +831,7 @@
       setView(s.view);
       load('live', panes.live.path); // back to the real, interactive page
     }
-    if (on) panes.live.el.querySelector('.pane-bar .tag').textContent = 'Freestyle';
+    if (on) panes.live.el.querySelector('.pane-bar .tag').textContent = artboard ? 'Library' : 'Freestyle';
     else setKind('live', panes.live.figmaSource); // puts the normal label back
     updateDeviceControls();
     layoutViewports();

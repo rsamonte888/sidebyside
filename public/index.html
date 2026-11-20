@@ -148,16 +148,42 @@
       <b>✏️ Freestyle</b>
       <button id="fsClose" type="button" title="Leave Freestyle">×</button>
     </div>
-    <p class="np-hint">Click anything on the page to select it. Drag <b>⠿</b> to move it, or use <b>↑ ↓</b>. Double-click text to edit it. This is a mockup on a copy of the page; the real site doesn't change.</p>
+    <div class="seg fs-mode" role="group" aria-label="Freestyle mode">
+      <button type="button" data-fs-mode="edit" class="active" title="Rearrange the page itself">Edit this page</button>
+      <button type="button" data-fs-mode="artboard" title="Drag blocks from the site onto a blank artboard and place them anywhere">Blank artboard</button>
+    </div>
+    <ul class="fs-help" data-only="edit">
+      <li><b>Click</b> a block to select it. Click again to go deeper; <b>Ctrl/⌘-click</b> picks exactly what's under the mouse.</li>
+      <li><b>Press and drag</b> to move it. The line shows where it lands.</li>
+      <li><b>Double-click</b> text to edit it.</li>
+    </ul>
+    <ul class="fs-help" data-only="artboard" hidden>
+      <li><b>Drag</b> any block from the site on the left onto the artboard.</li>
+      <li>On the artboard, drag layers <b>anywhere</b>; they snap to each other (hold <b>Alt</b> to stop snapping, <b>Shift</b> to keep a straight line). Drag the handles to resize.</li>
+      <li><b>Double-click</b> text to edit it. Arrow keys nudge, <b>[</b> <b>]</b> reorder, Delete removes.</li>
+    </ul>
     <div class="fs-sel" id="fsSel" aria-live="polite">Nothing selected</div>
+    <button type="button" id="fsAddSel" data-only="artboard" hidden title="Copy the block selected in the site onto the artboard">Add selected block to the artboard</button>
     <div class="fs-group">
-      <span class="fs-label">Add after the selection</span>
-      <input id="fsText" type="text" value="Book a visit" aria-label="Text for the new button or text">
+      <span class="fs-label" data-only="edit">Add: pick one, then click where it goes</span>
+      <span class="fs-label" data-only="artboard" hidden>Add: pick one, then click or drag on the artboard</span>
+      <input id="fsText" type="text" value="Book a visit" aria-label="Text for the new button or text (or an image URL)">
       <div class="fs-add">
         <button type="button" data-add="button">Button</button>
         <button type="button" data-add="text">Text</button>
-        <button type="button" data-add="image">Image</button>
-        <button type="button" data-add="spacer">Spacer</button>
+        <button type="button" data-add="image" title="Placeholder, or the image at the URL typed above">Image</button>
+        <button type="button" data-add="spacer" data-only="edit">Spacer</button>
+        <button type="button" data-add="shape" data-only="artboard" hidden>Shape</button>
+      </div>
+    </div>
+    <div class="fs-group" data-only="artboard" hidden>
+      <span class="fs-label">Selected layer</span>
+      <div class="fs-add fs-arrange">
+        <button type="button" data-arrange="front" title="Bring to front (Ctrl+])">Front</button>
+        <button type="button" data-arrange="back" title="Send to back (Ctrl+[)">Back</button>
+        <button type="button" data-arrange="dup" title="Duplicate (Ctrl+D)">Duplicate</button>
+        <button type="button" data-arrange="del" title="Delete">Delete</button>
+        <label class="fs-color" title="Colour of a shape or text">Colour <input type="color" id="fsColor" value="#e9d5ff"></label>
       </div>
     </div>
     <div class="fs-row">
@@ -165,11 +191,11 @@
       <button type="button" id="fsRedo" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
       <button type="button" id="fsReset">Reset</button>
     </div>
-    <label class="toggle fs-orig"><input type="checkbox" id="fsOriginal"> Show the original next to it</label>
+    <label class="toggle fs-orig" data-only="edit"><input type="checkbox" id="fsOriginal"> Show the original next to it</label>
     <div class="fs-count" id="fsCount">No changes yet</div>
     <button type="button" id="fsShot" class="primary">Take screenshot</button>
     <button type="button" id="fsLink">Copy link to this mockup</button>
-    <p class="np-foot">The page is frozen while you edit, so menus and accordions don't open. Leaving Freestyle discards the edits unless you copied the link.</p>
+    <p class="np-foot">The page is frozen while you edit, so menus and accordions don't open. Leaving Freestyle discards the mockup unless you copied the link.</p>
   </aside>
 
   <aside id="notesPanel" class="notes-panel" hidden>

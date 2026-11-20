@@ -531,3 +531,22 @@ body:not(.device-mode) .device-only { display: none !important; }
 .fs-row button { flex: 1; }
 .fs-count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .fs-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.fs-help { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+.fs-help b { color: var(--text); }
+.fs-add button.active { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+.fs-panel [data-only][hidden] { display: none !important; }
+.fs-mode { display: flex; }
+.fs-mode button { flex: 1; font-size: 12.5px; }
+.fs-mode button.active { background: #7c3aed; border-color: #7c3aed; }
+.fs-arrange { grid-template-columns: 1fr 1fr; }
+.fs-color { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+.fs-color input { width: 44px; height: 26px; padding: 0 2px; }
+/* A block being dragged from the site onto the artboard. */
+.fs-ghost { position: fixed; left: 0; top: 0; z-index: 10001; pointer-events: none; box-sizing: border-box;
+  border: 2px dashed #9ca3af; background: rgba(124, 58, 237, .08); border-radius: 6px; overflow: hidden;
+  color: #7c3aed; font: 600 12px ui-monospace, monospace; padding: 6px 8px; white-space: nowrap; text-overflow: ellipsis; }
+.fs-ghost.ok { border-color: #7c3aed; background: rgba(124, 58, 237, .18); }
+.fs-ghost[hidden] { display: none; }
+.fs-cover { position: fixed; inset: 0; z-index: 10000; cursor: grabbing; }
+.fs-cover[hidden] { display: none; }
+.fs-panel > * { flex-shrink: 0; }

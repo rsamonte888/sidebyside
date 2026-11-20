@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Artboard</title>
+  <!-- The site's stylesheets are copied in here by Freestyle, so blocks
+       dragged from the site keep their look. -->
+  <style id="sbs-board-base">
+    html, body { margin: 0 !important; padding: 0 !important; }
+    body { min-height: 100vh; overflow: auto !important; position: static !important; }
+    #sbs-board { position: relative; min-height: 100vh; overflow: hidden; }
+    #sbs-board.empty::before {
+      content: "Drag blocks here from the site on the left, or pick Button / Text / Image / Shape in the panel and click here.";
+      position: absolute; left: 50%; top: 40vh; transform: translate(-50%, -50%);
+      width: min(420px, 80%); text-align: center; color: #9ca3af;
+      font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; pointer-events: none;
+    }
+    .sbs-layer { position: absolute; box-sizing: border-box; }
+    .sbs-layer > .sbs-content { position: relative !important; inset: auto !important; transform: none !important;
+      width: 100% !important; max-width: none !important; min-width: 0 !important; margin: 0 !important; box-sizing: border-box !important; }
+    .sbs-layer.fill-h > .sbs-content { height: 100% !important; }
+    .sbs-layer [contenteditable="true"] { outline: 2px solid #7c3aed; outline-offset: 2px; cursor: text; }
+    .sbs-shape { width: 100%; height: 100%; }
+    .sbs-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .sbs-img-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+      background: repeating-linear-gradient(45deg, #ede9fe, #ede9fe 10px, #f5f3ff 10px, #f5f3ff 20px);
+      color: #6d28d9; font: 600 14px system-ui, sans-serif; border: 1px dashed #a78bfa; box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div id="sbs-board" class="empty"></div>
+  <script src="/__sbs/ui/freestyle-artboard.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 // Freestyle editor. Runs inside the proxied page (loaded on demand by the
-// Side by Side UI) and turns it into an editable canvas: select, move, drag,
-// duplicate, delete, edit text and add elements.
+// Side by Side UI) and turns it into an editable canvas, Figma/Notion style:
+// click selects a block (click again to go deeper), press-and-drag moves it
+// with a live preview, and new elements are placed by clicking where they go.
 //
 // When it starts it takes a snapshot of the fully rendered page and edits
 // that, so the site's own code can't re-render the edits away. Every change
@@ -16,11 +17,20 @@
   var pristine = null; // <body> as it was when Freestyle started
   var ops = [];
   var redo = [];
-  var selected = null; // element
-  var editing = null; // element being text-edited
-  var dragging = null;
+  var selected = null;
+  var editing = null;  // element being text-edited
+  var pressed = null;  // mouse is down on the page, not yet a drag
+  var dragging = null; // { el, ghost, drop, dx, dy }
+  var placing = null;  // { kind, text, drop }
+  var hovered = null;
+  var pointer = { x: 0, y: 0 };
   var active = false;
   var onChange = function () {};
+  // 'edit' = rearrange this page; 'library' = read-only source that blocks are
+  // dragged out of, onto the Freestyle artboard (reported via onExternal).
+  var mode = 'edit';
+  var onExternal = function () {};
+  var external = null; // { el } while dragging a block out of the library
 
   // ---------------------------------------------------------------- overlay
   // Lives on <html>, outside <body>, in a shadow root so the site's CSS can't touch it.
@@ -30,33 +40,41 @@
   shadow.innerHTML =
     '<style>' +
     ':host{all:initial}' +
-    '.box{position:fixed;pointer-events:none;box-sizing:border-box;border-radius:3px}' +
-    '.hover{border:1px dashed ' + ACCENT + 'aa;background:' + ACCENT + '0d}' +
-    '.sel{border:2px solid ' + ACCENT + ';box-shadow:0 0 0 1px #fff}' +
-    '.drop{position:fixed;height:4px;background:' + ACCENT + ';border-radius:2px;pointer-events:none;box-shadow:0 0 0 2px #fff}' +
-    '.bar{position:fixed;display:flex;align-items:center;gap:2px;padding:3px;background:#1f1633;border-radius:9px;' +
-    'box-shadow:0 6px 18px rgba(0,0,0,.3);pointer-events:auto;font:12px/1 Inter,system-ui,sans-serif;color:#fff;white-space:nowrap}' +
-    '.bar button{all:unset;cursor:pointer;min-width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;font-size:14px;padding:0 4px}' +
+    '.box{position:fixed;pointer-events:none;box-sizing:border-box;border-radius:4px}' +
+    '.hover{border:1.5px solid ' + ACCENT + '88}' +
+    '.sel{border:2px solid ' + ACCENT + ';box-shadow:0 0 0 1px #fff, 0 0 0 4px ' + ACCENT + '22}' +
+    '.zone{border:2px dashed ' + ACCENT + '66;background:' + ACCENT + '08}' +
+    '.drop{position:fixed;height:4px;background:' + ACCENT + ';border-radius:3px;pointer-events:none;box-shadow:0 0 0 2px #fff}' +
+    '.drop::before,.drop::after{content:"";position:absolute;top:-4px;width:12px;height:12px;border-radius:50%;background:' + ACCENT + ';box-shadow:0 0 0 2px #fff}' +
+    '.drop::before{left:-6px}.drop::after{right:-6px}' +
+    '.drop span{position:absolute;left:50%;top:-30px;transform:translateX(-50%);background:' + ACCENT + ';color:#fff;font:600 12px/1 Inter,system-ui,sans-serif;padding:6px 10px;border-radius:999px;white-space:nowrap}' +
+    '.tip{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#1f1633;color:#fff;font:500 13px/1.3 Inter,system-ui,sans-serif;padding:8px 14px;border-radius:999px;box-shadow:0 6px 18px rgba(0,0,0,.3);white-space:nowrap}' +
+    '.bar{position:fixed;display:flex;align-items:center;gap:2px;padding:4px;background:#1f1633;border-radius:12px;' +
+    'box-shadow:0 8px 24px rgba(0,0,0,.3);pointer-events:auto;font:13px/1 Inter,system-ui,sans-serif;color:#fff;white-space:nowrap}' +
+    '.bar button{all:unset;cursor:pointer;min-width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;font-size:16px;padding:0 6px;gap:6px}' +
     '.bar button:hover{background:#ffffff22}.bar button:focus-visible{outline:2px solid #c4b5fd}' +
-    '.bar button[disabled]{opacity:.35;cursor:default}.bar .grip{cursor:grab}' +
-    '.bar .tag{padding:0 6px 0 4px;color:#c4b5fd;max-width:150px;overflow:hidden;text-overflow:ellipsis}' +
-    '.bar .sep{width:1px;height:16px;background:#ffffff33;margin:0 2px}' +
+    '.bar button[disabled]{opacity:.35;cursor:default}.bar button[data-a=drag]{cursor:grab;font-size:13px}' +
+    '.bar .tag{padding:0 8px 0 4px;color:#c4b5fd;max-width:170px;overflow:hidden;text-overflow:ellipsis;font-size:12px}' +
+    '.bar .sep{width:1px;height:20px;background:#ffffff33;margin:0 2px}' +
     '[hidden]{display:none!important}' +
     '</style>' +
-    '<div class="box hover" hidden></div><div class="box sel" hidden></div><div class="drop" hidden></div>' +
+    '<div class="box zone" hidden></div><div class="box hover" hidden></div><div class="box sel" hidden></div>' +
+    '<div class="drop" hidden><span>Drop here</span></div><div class="tip" hidden></div>' +
     '<div class="bar" hidden>' +
-    '<button class="grip" data-a="drag" title="Drag to a new spot">⠿</button>' +
+    '<button data-a="drag" title="Drag to move (or just press and drag the element)">⠿ Move</button>' +
     '<span class="tag"></span><span class="sep"></span>' +
     '<button data-a="up" title="Move up (Alt+↑)">↑</button>' +
     '<button data-a="down" title="Move down (Alt+↓)">↓</button>' +
-    '<button data-a="parent" title="Select the section around it">⇱</button>' +
-    '<button data-a="edit" title="Edit text (double-click)">✎</button>' +
-    '<button data-a="dup" title="Duplicate">⧉</button>' +
+    '<button data-a="parent" title="Select the block around it (Esc)">⇱</button>' +
+    '<button data-a="edit" title="Edit text (Enter or double-click)">✎</button>' +
+    '<button data-a="dup" title="Duplicate (Ctrl+D)">⧉</button>' +
     '<button data-a="del" title="Delete (Del)">🗑</button>' +
     '</div>';
+  var zoneBox = shadow.querySelector('.zone');
   var hoverBox = shadow.querySelector('.hover');
   var selBox = shadow.querySelector('.sel');
   var dropLine = shadow.querySelector('.drop');
+  var tip = shadow.querySelector('.tip');
   var bar = shadow.querySelector('.bar');
   var tagLabel = shadow.querySelector('.tag');
 
@@ -149,7 +167,7 @@
   // ---------------------------------------------------------------- operations
   function apply(op) {
     var el = resolve(op.p);
-    if (!el && op.o !== 'add') return null;
+    if (!el) return null;
     switch (op.o) {
       case 'del': el.remove(); return null;
       case 'dup': { var c = el.cloneNode(true); el.parentNode.insertBefore(c, el.nextSibling); return c; }
@@ -166,10 +184,8 @@
         return el;
       }
       case 'add': {
-        var ref = resolve(op.p);
-        if (!ref) return null;
         var n = make(op);
-        ref.parentNode.insertBefore(n, ref.nextSibling);
+        el.parentNode.insertBefore(n, op.w === 'b' ? el : el.nextSibling);
         return n;
       }
     }
@@ -179,7 +195,8 @@
   function notify() {
     onChange(ops.slice(), {
       count: ops.length, canUndo: ops.length > 0, canRedo: redo.length > 0,
-      selected: selected ? describe(selected) : null,
+      selected: selected ? describe(selected) : null, placing: placing ? placing.kind : null,
+      selectedPath: selected ? pathOf(selected) : null,
     });
   }
 
@@ -193,21 +210,55 @@
   }
 
   /** Rebuild the page from the snapshot and the operations (undo, redo, reset, load). */
-  function render(keepPath) {
+  function render() {
     var y = window.scrollY;
     var body = pristine.cloneNode(true);
     doc.documentElement.replaceChild(body, doc.body);
     ops.forEach(apply);
     window.scrollTo(0, y);
-    setSelected(keepPath ? resolve(keepPath) : null);
+    setSelected(null);
     notify();
+  }
+
+  // ---------------------------------------------------------------- picking blocks
+  var visible = function (el) { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+
+  /**
+   * The block a first click should select: the outermost element under the
+   * pointer that is one of several siblings and isn't a page-sized wrapper
+   * (a section, a card, a row, a button group).
+   */
+  function blockAt(t) {
+    if (!editable(t)) return null;
+    var chain = [];
+    for (var n = t; n && n !== doc.body; n = n.parentElement) chain.unshift(n);
+    var pageH = Math.max(doc.documentElement.scrollHeight, innerHeight);
+    for (var i = 0; i < chain.length; i++) {
+      var el = chain[i];
+      var siblings = Array.prototype.filter.call(el.parentElement.children, visible).length;
+      var h = el.getBoundingClientRect().height;
+      if (siblings > 1 && h < pageH * 0.6 && visible(el)) return el;
+    }
+    return t;
+  }
+  /** One level deeper than the selection, towards `t` (click again to drill in). */
+  function deeper(t) {
+    for (var n = t; n && n.parentElement; n = n.parentElement) if (n.parentElement === selected) return n;
+    return t;
+  }
+  function pick(t, exact) {
+    if (exact) return t;
+    if (selected && selected !== t && selected.contains(t)) return deeper(t);
+    if (selected === t) return t;
+    return blockAt(t);
   }
 
   // ---------------------------------------------------------------- selection UI
   function describe(el) {
     var cls = (el.getAttribute('class') || '').trim().split(/\s+/)[0];
-    var t = el.getAttribute('data-sbs-added') ? 'new ' + el.getAttribute('data-sbs-added') : el.tagName.toLowerCase() + (cls ? '.' + cls.slice(0, 24) : '');
-    return t;
+    if (el.getAttribute('data-sbs-added')) return 'new ' + el.getAttribute('data-sbs-added');
+    var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    return el.tagName.toLowerCase() + (cls ? '.' + cls.slice(0, 20) : '') + (txt ? ' “' + txt.slice(0, 24) + (txt.length > 24 ? '…' : '') + '”' : '');
   }
   function place(box, el) {
     if (!el || !doc.body.contains(el)) { box.hidden = true; return null; }
@@ -225,24 +276,35 @@
   }
   function position() {
     if (!active) return;
-    var r = place(selBox, selected);
-    bar.hidden = !r || !!dragging;
-    if (!r) return;
+    var r = place(selBox, dragging || external ? null : selected);
+    bar.hidden = !r || !!dragging || !!placing || !!editing || mode === 'library';
+    if (bar.hidden) return;
     tagLabel.textContent = describe(selected);
     var bw = bar.offsetWidth, bh = bar.offsetHeight;
-    var top = r.top - bh - 6;
-    if (top < 4) top = r.bottom + 6 > innerHeight - bh - 4 ? Math.max(4, r.top + 4) : r.bottom + 6;
+    var top = r.top - bh - 8;
+    if (top < 6) top = r.bottom + 8 > innerHeight - bh - 6 ? Math.max(6, r.top + 6) : r.bottom + 8;
     bar.style.top = top + 'px';
-    bar.style.left = Math.max(4, Math.min(r.left, innerWidth - bw - 4)) + 'px';
+    bar.style.left = Math.max(6, Math.min(r.left, innerWidth - bw - 6)) + 'px';
     shadow.querySelector('[data-a=up]').disabled = !selected.previousElementSibling;
     shadow.querySelector('[data-a=down]').disabled = !selected.nextElementSibling;
     shadow.querySelector('[data-a=parent]').disabled = !editable(selected.parentElement);
   }
+  function showTip(text) { tip.hidden = !text; tip.textContent = text || ''; }
+
+  // ---------------------------------------------------------------- frame loop
+  // Keeps the outlines on their elements, and scrolls the page when a drag or
+  // placement nears the top or bottom edge.
   var raf = 0;
   function loop() {
     if (!active) return;
+    if ((dragging || placing) && !editing) {
+      var edge = 70, speed = 0;
+      if (pointer.y < edge) speed = -Math.ceil((edge - pointer.y) / 4);
+      else if (pointer.y > innerHeight - edge) speed = Math.ceil((pointer.y - (innerHeight - edge)) / 4);
+      if (speed) { window.scrollBy(0, speed); updateDrop(); }
+    }
     position();
-    if (hovered) place(hoverBox, hovered);
+    if (hovered && !dragging) place(hoverBox, hovered); else hoverBox.hidden = true;
     raf = requestAnimationFrame(loop);
   }
 
@@ -254,9 +316,10 @@
     el.focus();
     var range = doc.createRange();
     range.selectNodeContents(el);
-    var s = window.getSelection();
-    s.removeAllRanges();
-    s.addRange(range);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    position();
   }
   function endEdit() {
     if (!editing) return;
@@ -278,53 +341,145 @@
     else if (a === 'edit') startEdit(el);
   }
 
-  // Where would a drop go? Prefer a sibling of the dragged element, so moving a
-  // section reorders sections rather than dropping it inside a paragraph.
-  function dropTarget(x, y) {
+  // ---------------------------------------------------------------- drop targets
+  function elementAt(x, y) {
     host.style.display = 'none';
+    if (dragging && dragging.ghost) dragging.ghost.style.display = 'none';
     var t = doc.elementFromPoint(x, y);
     host.style.display = '';
-    if (!editable(t) || dragging.el.contains(t)) return null;
-    var parent = dragging.el.parentElement;
-    if (parent && parent.contains(t)) {
-      while (t.parentElement !== parent) t = t.parentElement;
+    if (dragging && dragging.ghost) dragging.ghost.style.display = '';
+    return t;
+  }
+  /**
+   * Where a drop would go: next to a sibling of the dragged element where
+   * possible (so sections reorder as sections), otherwise next to the block
+   * under the pointer.
+   */
+  function dropAt(x, y) {
+    var t = elementAt(x, y);
+    if (!editable(t)) return null;
+    var moving = dragging && dragging.el;
+    if (moving && moving.contains(t)) return null;
+    if (moving && moving.parentElement && moving.parentElement.contains(t) && moving.parentElement !== t) {
+      while (t.parentElement !== moving.parentElement) t = t.parentElement;
     } else {
-      var want = dragging.el.getBoundingClientRect().width * 0.8;
-      while (t.parentElement && t.parentElement !== doc.body && t.getBoundingClientRect().width < want) t = t.parentElement;
+      t = blockAt(t) || t;
+      if (moving) {
+        var want = moving.getBoundingClientRect().width * 0.7;
+        while (t.parentElement && t.parentElement !== doc.body && t.getBoundingClientRect().width < want) t = t.parentElement;
+      }
     }
-    if (t === dragging.el) return null;
+    if (!editable(t) || t === moving) return null;
     var r = t.getBoundingClientRect();
     return { el: t, before: y < r.top + r.height / 2, rect: r };
   }
+  function updateDrop() {
+    var state = dragging || placing;
+    if (!state) return;
+    var d = dropAt(pointer.x, pointer.y);
+    state.drop = d;
+    if (!d) { dropLine.hidden = true; zoneBox.hidden = true; return; }
+    dropLine.hidden = false;
+    dropLine.style.left = d.rect.left + 'px';
+    dropLine.style.width = Math.max(40, d.rect.width) + 'px';
+    dropLine.style.top = (d.before ? d.rect.top : d.rect.bottom) - 2 + 'px';
+    place(zoneBox, d.el.parentElement !== doc.body ? d.el.parentElement : null);
+  }
+
+  // ---------------------------------------------------------------- dragging
+  function startDrag(el, e) {
+    var r = el.getBoundingClientRect();
+    var ghost = el.cloneNode(true);
+    ghost.removeAttribute('id');
+    Object.assign(ghost.style, {
+      position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', margin: '0',
+      opacity: '0.75', pointerEvents: 'none', zIndex: '2147483646', boxShadow: '0 18px 40px rgba(31,22,51,.35)',
+      transform: 'rotate(1deg) scale(0.98)', transition: 'none', overflow: 'hidden', background: getComputedStyle(el).backgroundColor === 'rgba(0, 0, 0, 0)' ? '#fff' : '',
+    });
+    doc.body.appendChild(ghost);
+    dragging = { el: el, ghost: ghost, drop: null, dx: e.clientX - r.left, dy: e.clientY - r.top, opacity: el.style.opacity };
+    el.style.opacity = '0.3';
+    doc.documentElement.style.cursor = 'grabbing';
+    setSelected(el);
+    showTip('Drop it where the line shows · Esc to cancel');
+    moveGhost();
+    updateDrop();
+  }
+  function moveGhost() {
+    if (!dragging) return;
+    dragging.ghost.style.left = pointer.x - dragging.dx + 'px';
+    dragging.ghost.style.top = pointer.y - dragging.dy + 'px';
+  }
+  function endDrag(cancel) {
+    var d = dragging;
+    dragging = null;
+    d.ghost.remove(); // before computing paths, so it doesn't count
+    d.el.style.opacity = d.opacity;
+    doc.documentElement.style.cursor = '';
+    dropLine.hidden = true;
+    zoneBox.hidden = true;
+    showTip(null);
+    if (!cancel && d.drop && d.drop.el !== d.el) {
+      commit({ o: 'mv', p: pathOf(d.el), t: pathOf(d.drop.el), w: d.drop.before ? 'b' : 'a' });
+    } else {
+      setSelected(d.el);
+    }
+  }
+
+  // ---------------------------------------------------------------- placing new elements
+  var NAMES = { button: 'button', text: 'text', image: 'image', spacer: 'spacer' };
+  function startPlacing(kind, text) {
+    if (editing) endEdit();
+    placing = { kind: kind, text: text, drop: null };
+    doc.documentElement.style.cursor = 'copy';
+    showTip('Click where the new ' + NAMES[kind] + ' should go · Esc to cancel');
+    position();
+    notify();
+  }
+  function endPlacing(drop) {
+    var p = placing;
+    placing = null;
+    doc.documentElement.style.cursor = '';
+    dropLine.hidden = true;
+    zoneBox.hidden = true;
+    showTip(null);
+    if (drop) {
+      var op = { o: 'add', p: pathOf(drop.el), w: drop.before ? 'b' : 'a', k: p.kind, v: p.text || '' };
+      if (p.kind === 'button') { var tpl = buttonTemplate(); if (tpl) op.tp = pathOf(tpl); }
+      commit(op);
+    } else {
+      notify();
+    }
+  }
 
   // ---------------------------------------------------------------- events
-  var hovered = null;
   var ours = function (e) { return e.composedPath && e.composedPath().indexOf(host) >= 0; };
   var inEdit = function (e) { return editing && editing.contains(e.target); };
+  var barButton = function (e) { var t = e.composedPath()[0]; return t && t.closest ? t.closest('button') : null; };
 
   function onMove(e) {
-    if (dragging) {
-      var d = dropTarget(e.clientX, e.clientY);
-      dragging.drop = d;
-      if (!d) { dropLine.hidden = true; return; }
-      dropLine.hidden = false;
-      dropLine.style.left = d.rect.left + 'px';
-      dropLine.style.width = d.rect.width + 'px';
-      dropLine.style.top = (d.before ? d.rect.top : d.rect.bottom) - 2 + 'px';
-      return;
+    pointer.x = e.clientX;
+    pointer.y = e.clientY;
+    if (pressed && !dragging && !external && Math.abs(e.clientX - pressed.x) + Math.abs(e.clientY - pressed.y) > 5) {
+      if (mode === 'library') startExternal(pressed.el, pressed.e);
+      else startDrag(pressed.el, pressed.e);
+      pressed = null;
     }
-    if (ours(e) || editing) { hoverBox.hidden = true; hovered = null; return; }
-    hovered = editable(e.target) ? e.target : null;
-    if (!hovered) hoverBox.hidden = true;
+    if (external) { onExternal({ phase: 'move', x: e.clientX, y: e.clientY }); return; }
+    if (dragging) { moveGhost(); updateDrop(); return; }
+    if (placing) { updateDrop(); return; }
+    if (ours(e) || editing) { hovered = null; return; }
+    hovered = editable(e.target) ? pick(e.target, e.ctrlKey || e.metaKey) : null;
   }
   function onDown(e) {
+    if (e.button !== 0) return;
+    swallowClick = false;
     if (ours(e)) {
-      var b = e.composedPath()[0].closest && e.composedPath()[0].closest('button');
+      var b = barButton(e);
       if (b && b.dataset.a === 'drag' && selected) {
         e.preventDefault();
-        dragging = { el: selected, drop: null };
-        bar.hidden = true;
-        hoverBox.hidden = true;
+        pointer.x = e.clientX; pointer.y = e.clientY;
+        startDrag(selected, e);
       }
       return;
     }
@@ -332,34 +487,59 @@
     e.preventDefault(); // no text selection, focus or native drag on the page
     e.stopImmediatePropagation();
     window.focus(); // ...but keep keyboard shortcuts (Delete, Ctrl+Z) coming to the page
+    if (placing || !editable(e.target)) return;
+    // Press-and-drag moves the block (or the selection, if pressing inside it).
+    var el = selected && selected.contains(e.target) ? selected : pick(e.target, e.ctrlKey || e.metaKey);
+    pressed = { el: el, x: e.clientX, y: e.clientY, e: { clientX: e.clientX, clientY: e.clientY } };
   }
+  function startExternal(el, e) {
+    var r = el.getBoundingClientRect();
+    external = { el: el };
+    setSelected(el);
+    hovered = null;
+    doc.documentElement.style.cursor = 'grabbing';
+    onExternal({
+      phase: 'start', path: pathOf(el), label: describe(el), w: r.width, h: r.height,
+      dx: e.clientX - r.left, dy: e.clientY - r.top, x: e.clientX, y: e.clientY,
+    });
+  }
+  function endExternal(e, cancel) {
+    external = null;
+    doc.documentElement.style.cursor = '';
+    onExternal(cancel ? { phase: 'cancel' } : { phase: 'end', x: e.clientX, y: e.clientY });
+    position();
+  }
+
   function onUp(e) {
+    pressed = null;
+    if (external) { endExternal(e, false); e.stopImmediatePropagation(); swallowClick = true; return; }
     if (!dragging) return;
-    var d = dragging.drop, el = dragging.el;
-    dragging = null;
-    dropLine.hidden = true;
-    if (d) commit({ o: 'mv', p: pathOf(el), t: pathOf(d.el), w: d.before ? 'b' : 'a' });
-    else position();
+    endDrag(false);
     e.stopImmediatePropagation();
+    swallowClick = true;
   }
+  var swallowClick = false;
   function onClick(e) {
     if (ours(e)) {
-      var b = e.composedPath()[0].closest && e.composedPath()[0].closest('button');
+      var b = barButton(e);
       if (b && b.dataset.a && b.dataset.a !== 'drag') act(b.dataset.a);
       return;
     }
     if (inEdit(e)) return;
     e.preventDefault(); // links don't navigate, buttons don't submit
     e.stopImmediatePropagation();
+    if (swallowClick) { swallowClick = false; return; } // the end of a drag
+    if (placing) { updateDrop(); endPlacing(placing.drop); return; }
     if (editing) endEdit();
-    setSelected(e.target);
+    setSelected(pick(e.target, e.ctrlKey || e.metaKey));
     notify();
   }
   function onDbl(e) {
     if (ours(e) || inEdit(e)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    setSelected(e.target);
+    if (mode === 'library') return;
+    setSelected(e.target); // the exact thing under the pointer
     startEdit(selected);
   }
   function onKey(e) {
@@ -367,12 +547,19 @@
       if (e.key === 'Escape') { e.preventDefault(); endEdit(); }
       return;
     }
+    if (e.key === 'Escape') {
+      if (external) { endExternal(e, true); return; }
+      if (dragging) { endDrag(true); return; }
+      if (placing) { endPlacing(null); return; }
+    }
+    if (mode === 'library') return; // the library is read-only
     var mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) api.redo(); else api.undo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); api.redo(); return; }
     if (!selected) return;
-    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); act('del'); }
-    else if (e.key === 'Escape') { setSelected(null); notify(); }
+    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); act('dup'); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); act('del'); }
+    else if (e.key === 'Escape') { if (editable(selected.parentElement)) setSelected(selected.parentElement); else setSelected(null); notify(); }
     else if (e.altKey && e.key === 'ArrowUp') { e.preventDefault(); act('up'); }
     else if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); act('down'); }
     else if (e.key === 'Enter') { e.preventDefault(); act('edit'); }
@@ -380,7 +567,8 @@
   var block = function (e) { if (!ours(e) && !inEdit(e)) { e.preventDefault(); e.stopImmediatePropagation(); } };
   var LISTENERS = [
     ['mousemove', onMove], ['mousedown', onDown], ['mouseup', onUp], ['click', onClick], ['dblclick', onDbl],
-    ['keydown', onKey], ['submit', block], ['auxclick', block], ['dragstart', block], ['pointerdown', function (e) { if (!ours(e) && !inEdit(e)) e.stopImmediatePropagation(); }],
+    ['keydown', onKey], ['submit', block], ['auxclick', block], ['dragstart', block],
+    ['pointerdown', function (e) { if (!ours(e) && !inEdit(e)) e.stopImmediatePropagation(); }],
   ];
 
   // ---------------------------------------------------------------- API
@@ -389,6 +577,8 @@
     start: function (opts) {
       opts = opts || {};
       onChange = opts.onChange || onChange;
+      mode = opts.mode || 'edit';
+      onExternal = opts.onExternal || onExternal;
       if (!active) {
         active = true;
         window.__sbsFreestyle = true; // tells the device emulation to stand aside
@@ -400,30 +590,40 @@
       }
       ops = (opts.ops || []).slice();
       redo = [];
-      render(null);
+      render();
     },
     stop: function () {
       if (!active) return;
       if (editing) endEdit();
+      if (dragging) endDrag(true);
       active = false;
       window.__sbsFreestyle = false;
       cancelAnimationFrame(raf);
       LISTENERS.forEach(function (l) { window.removeEventListener(l[0], l[1], true); });
       host.remove();
     },
-    /** Add an element after the selection. */
+    /** Next click on the page places a new element there. */
+    place: function (kind, text) { startPlacing(kind, text); },
+    cancelPlace: function () { if (placing) endPlacing(null); },
+    /** Add an element right after the selection. */
     add: function (kind, text) {
       if (!selected) return false;
-      var op = { o: 'add', p: pathOf(selected), k: kind, v: text || '' };
+      var op = { o: 'add', p: pathOf(selected), w: 'a', k: kind, v: text || '' };
       if (kind === 'button') { var tpl = buttonTemplate(); if (tpl) op.tp = pathOf(tpl); }
       commit(op);
       return true;
     },
-    undo: function () { if (editing) endEdit(); if (!ops.length) return; redo.push(ops.pop()); render(null); },
-    redo: function () { if (!redo.length) return; var r = redo.pop(); ops.push(r); var keep = redo; render(null); redo = keep; notify(); },
-    reset: function () { ops = []; redo = []; render(null); },
+    undo: function () { if (editing) endEdit(); if (!ops.length) return; redo.push(ops.pop()); render(); },
+    redo: function () { if (!redo.length) return; ops.push(redo.pop()); var keep = redo; render(); redo = keep; notify(); },
+    reset: function () { ops = []; redo = []; render(); },
     setCapturing: function (on) { host.style.visibility = on ? 'hidden' : ''; },
     isActive: function () { return active; },
+    /** The parent finished a drag out of the library itself (it caught the mouse-up). */
+    endExternal: function () { if (external) { external = null; doc.documentElement.style.cursor = ''; position(); } },
+    /** Live element for a path (the library's frozen page), for copying onto the artboard. */
+    elementAt: function (p) { return resolve(p); },
+    /** Path of the site's own filled button, to copy for "Add button". */
+    buttonPath: function () { var b = buttonTemplate(); return b ? pathOf(b) : null; },
   };
   window.__sbsFS = api;
 })();
